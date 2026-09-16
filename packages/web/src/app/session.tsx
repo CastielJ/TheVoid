@@ -4,6 +4,8 @@ import { trpc } from "../trpc/client";
 interface SessionUser {
   id: string;
   email: string;
+  username: string;
+  visibleName: string;
 }
 
 interface SessionContextValue {

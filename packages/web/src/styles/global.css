@@ -42,3 +42,92 @@ a {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+/**
+ * Post-launch refinement pass — shared motion system. Two reusable
+ * animations (a panel sliding in from the edge, and a popover/dropdown
+ * scaling+fading in) cover every panel/popover/dropdown added or redesigned
+ * in this pass: TaskDetailPanel, GroupDetailPanel, CanvasCreationPanel, the
+ * tag/assignee pickers, and NotificationBell's dropdown. One definition,
+ * reused everywhere, rather than each component inventing its own timing.
+ */
+@keyframes void-panel-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes void-pop-in {
+  from {
+    transform: scale(0.96) translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes void-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.void-panel-in {
+  animation: void-panel-in var(--motion-slow) var(--ease-emphasized);
+}
+
+.void-pop-in {
+  animation: void-pop-in var(--motion-base) var(--ease-standard);
+  transform-origin: top right;
+}
+
+.void-fade-in {
+  animation: void-fade-in var(--motion-base) var(--ease-standard);
+}
+
+@keyframes void-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.void-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+.void-btn:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.void-icon-btn {
+  border-radius: var(--radius-sm);
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+.void-icon-btn:hover {
+  background: rgba(127, 127, 127, 0.14);
+}
+
+/* Single source of truth for reduced motion (D-addendum: post-launch
+   refinement pass) — every transition/animation in the app is neutralized
+   here instead of each component independently checking the media query. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -9,6 +9,7 @@ import { taskRouter } from "./task.js";
 import { invitationRouter } from "./invitation.js";
 import { notificationRouter } from "./notification.js";
 import { searchRouter } from "./search.js";
+import { tagRouter } from "./tag.js";
 
 /**
  * Phase 0's only procedure: proves the full stack (React client → tRPC →
@@ -35,6 +36,7 @@ export const appRouter = router({
   invitation: invitationRouter,
   notification: notificationRouter,
   search: searchRouter,
+  tag: tagRouter,
 });
 
 export type AppRouter = typeof appRouter;

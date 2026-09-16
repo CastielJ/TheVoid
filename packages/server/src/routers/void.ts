@@ -15,6 +15,7 @@ import {
   updateVoidName,
   deleteVoid,
   listAccessibleVoids,
+  listEligibleMembersForVoid,
 } from "../domains/void/voids.js";
 import {
   grantVoidAccess,
@@ -180,5 +181,16 @@ export const voidRouter = router({
       const { voidId, ...camera } = input;
       await saveVoidCamera(voidId, ctx.session.user.id, camera);
       return { ok: true as const };
+    }),
+
+  // Post-launch refinement pass — powers the assignee search picker
+  // ("Search members..." -> "Alex Johnson (@alex)"). Gated by mere access
+  // (Viewer+), same bar as getCamera: this is a read of who else can see
+  // this Void, not a content mutation.
+  listEligibleMembers: protectedProcedure
+    .input(voidIdInput.extend({ query: z.string().optional() }))
+    .use(requireCapability(canAccessVoid, (input: { voidId: string }) => input.voidId))
+    .query(async ({ input }) => {
+      return listEligibleMembersForVoid(input.voidId, input.query);
     }),
 });

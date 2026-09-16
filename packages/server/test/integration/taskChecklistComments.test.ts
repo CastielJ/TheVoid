@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { pool, db } from "../../src/db/client.js";
 import { memberships } from "../../src/db/schema.js";
-import { createUser } from "../../src/domains/auth/users.js";
+import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
 import { createVoid } from "../../src/domains/void/voids.js";
 import { grantVoidAccess } from "../../src/domains/void/voidAccessGrants.js";

@@ -37,7 +37,17 @@ describe("Realtime layer (WebSocket)", () => {
 
   async function signupAndLogin(email: string) {
     const { client, cookieJar } = createTestClient(app);
-    await client.auth.signup.mutate({ email, password: "correct-horse-battery" });
+    const username = email
+      .split("@")[0]!
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "")
+      .padEnd(3, "0");
+    await client.auth.signup.mutate({
+      email,
+      username,
+      visibleName: email.split("@")[0]!,
+      password: "correct-horse-battery",
+    });
     await client.auth.login.mutate({ email, password: "correct-horse-battery" });
     const me = await client.auth.me.query();
     return { client, userId: me.id, cookie: cookieJar.cookie! };

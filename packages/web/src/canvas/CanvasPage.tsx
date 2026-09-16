@@ -5,6 +5,8 @@ import { useVoidRealtime } from "../realtime/useVoidRealtime";
 import { useCanvasStore } from "./store";
 import { CanvasViewport } from "./CanvasViewport";
 import { TaskDetailPanel } from "./TaskDetailPanel";
+import { GroupDetailPanel } from "./GroupDetailPanel";
+import { CanvasCreationPanel } from "./CanvasCreationPanel";
 import { Button } from "../ui/Button";
 import { FullPageStatus } from "../app/ProtectedRoute";
 
@@ -26,6 +28,14 @@ export function CanvasPage() {
 
   const [terminalMessage, setTerminalMessage] = useState<string | null>(null);
   const [openTaskId, setOpenTaskId] = useState<string | null>(focusState?.focusTaskId ?? null);
+  const [openGroupId, setOpenGroupId] = useState<string | null>(null);
+  // Page-local state, deliberately not in the Zustand canvas store — same
+  // reasoning as openTaskId/openGroupId above (the store holds shared/
+  // synced object state, not transient UI panel state).
+  const [creationRequest, setCreationRequest] = useState<{
+    world: { x: number; y: number };
+    screen: { x: number; y: number };
+  } | null>(null);
 
   const onEvicted = useCallback(
     () => setTerminalMessage("Your access to this Void was revoked."),
@@ -41,8 +51,6 @@ export function CanvasPage() {
 
   const connectionStatus = useCanvasStore((s) => s.connectionStatus);
   const setCamera = useCanvasStore((s) => s.setCamera);
-  const applyTask = useCanvasStore((s) => s.applyTask);
-  const applyGroup = useCanvasStore((s) => s.applyGroup);
 
   const savedCamera = trpc.void.getCamera.useQuery({ voidId });
   useEffect(() => {
@@ -56,26 +64,6 @@ export function CanvasPage() {
   }, [savedCamera.data]);
 
   const voidInfo = trpc.void.get.useQuery({ voidId });
-
-  const createTask = trpc.task.create.useMutation({ onSuccess: (t) => applyTask(t) });
-  const createGroup = trpc.group.create.useMutation({ onSuccess: (g) => applyGroup(g) });
-
-  function handleAddTask() {
-    const { camera } = useCanvasStore.getState();
-    createTask.mutate({ voidId: voidId!, title: "New Task", x: camera.x + 80, y: camera.y + 80 });
-  }
-
-  function handleAddGroup() {
-    const { camera } = useCanvasStore.getState();
-    createGroup.mutate({
-      voidId: voidId!,
-      name: "New Group",
-      x: camera.x + 60,
-      y: camera.y + 60,
-      width: 320,
-      height: 220,
-    });
-  }
 
   if (terminalMessage) {
     return (
@@ -125,18 +113,29 @@ export function CanvasPage() {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Button variant="secondary" onClick={handleAddGroup}>
-            + Group
-          </Button>
-          <Button onClick={handleAddTask}>+ Task</Button>
-        </div>
+        <span style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
+          Double-click anywhere to create
+        </span>
       </header>
 
-      <div style={{ position: "relative", flex: 1 }}>
+      <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>
         <CanvasViewport
           voidId={voidId}
-          onOpenTask={setOpenTaskId}
+          onOpenTask={(taskId) => {
+            setOpenGroupId(null);
+            setCreationRequest(null);
+            setOpenTaskId(taskId);
+          }}
+          onOpenGroup={(groupId) => {
+            setOpenTaskId(null);
+            setCreationRequest(null);
+            setOpenGroupId(groupId);
+          }}
+          onBackgroundDoubleClick={(world, screen) => {
+            setOpenTaskId(null);
+            setOpenGroupId(null);
+            setCreationRequest({ world, screen });
+          }}
           focusTarget={
             focusState?.focusX !== undefined && focusState.focusY !== undefined
               ? { x: focusState.focusX, y: focusState.focusY }
@@ -144,6 +143,17 @@ export function CanvasPage() {
           }
         />
         {openTaskId && <TaskDetailPanel taskId={openTaskId} onClose={() => setOpenTaskId(null)} />}
+        {openGroupId && (
+          <GroupDetailPanel groupId={openGroupId} onClose={() => setOpenGroupId(null)} />
+        )}
+        {creationRequest && (
+          <CanvasCreationPanel
+            voidId={voidId}
+            worldPosition={creationRequest.world}
+            screenPosition={creationRequest.screen}
+            onClose={() => setCreationRequest(null)}
+          />
+        )}
       </div>
     </div>
   );

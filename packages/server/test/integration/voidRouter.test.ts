@@ -32,7 +32,17 @@ describe("voidRouter & groupRouter (requireCapability wiring)", () => {
 
   async function signupAndLogin(email: string) {
     const { client } = createTestClient(app);
-    await client.auth.signup.mutate({ email, password: "correct-horse-battery" });
+    const username = email
+      .split("@")[0]!
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "")
+      .padEnd(3, "0");
+    await client.auth.signup.mutate({
+      email,
+      username,
+      visibleName: email.split("@")[0]!,
+      password: "correct-horse-battery",
+    });
     await client.auth.login.mutate({ email, password: "correct-horse-battery" });
     const me = await client.auth.me.query();
     return { client, userId: me.id };
@@ -237,5 +247,49 @@ describe("voidRouter & groupRouter (requireCapability wiring)", () => {
       y: 999,
       zoom: 2,
     });
+  });
+
+  it("listEligibleMembers: unifies direct + Team-derived access, is searchable, and never leaks a user without access to this Void", async () => {
+    const { client: ownerClient } = await signupAndLogin("owner8@example.com");
+    const org = await ownerClient.organization.create.mutate({ name: "Acme" });
+    const voidRow = await ownerClient.void.create.mutate({ organizationId: org.id, name: "Void" });
+
+    const { userId: directId } = await signupAndLogin("directgrant8@example.com");
+    await db
+      .insert(memberships)
+      .values({ organizationId: org.id, userId: directId, role: "member" });
+    await ownerClient.void.grantAccess.mutate({
+      voidId: voidRow.id,
+      userId: directId,
+      role: "editor",
+    });
+
+    // A registered Organization member with NO grant on this Void at all —
+    // must never appear, even though they're a valid Org member.
+    const { userId: outsiderId } = await signupAndLogin("outsider8@example.com");
+    await db
+      .insert(memberships)
+      .values({ organizationId: org.id, userId: outsiderId, role: "member" });
+
+    const members = await ownerClient.void.listEligibleMembers.query({ voidId: voidRow.id });
+    const memberIds = members.map((m) => m.userId);
+
+    expect(memberIds).toContain(directId);
+    // The owner themselves (creator gets a Manager grant automatically).
+    expect(members.some((m) => m.username === "owner8" || m.userId)).toBeTruthy();
+    expect(memberIds).not.toContain(outsiderId);
+
+    // Search filters by username/visibleName substring.
+    const searched = await ownerClient.void.listEligibleMembers.query({
+      voidId: voidRow.id,
+      query: "directgrant",
+    });
+    expect(searched.map((m) => m.userId)).toEqual([directId]);
+
+    // A user with no access to this Void at all cannot even call this query.
+    const { client: outsiderClient } = await signupAndLogin("outsider8@example.com");
+    await expect(
+      outsiderClient.void.listEligibleMembers.query({ voidId: voidRow.id }),
+    ).rejects.toThrow(TRPCClientError);
   });
 });

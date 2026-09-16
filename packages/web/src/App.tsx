@@ -3,6 +3,7 @@ import { SessionProvider } from "./app/session";
 import { ProtectedRoute } from "./app/ProtectedRoute";
 import { LoginPage } from "./features/auth/LoginPage";
 import { SignupPage } from "./features/auth/SignupPage";
+import { VerifyEmailPage } from "./features/auth/VerifyEmailPage";
 import { OrgListPage } from "./features/org/OrgListPage";
 import { OrgDashboardPage } from "./features/org/OrgDashboardPage";
 import { TeamDetailPage } from "./features/team/TeamDetailPage";
@@ -18,6 +19,7 @@ export function App() {
         <Route path="/" element={<Navigate to="/orgs" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
         {/* Public: handles its own unauthenticated state (login/signup with a
             redirect back here), since ProtectedRoute's blanket redirect would
             drop the ?token= query string. */}

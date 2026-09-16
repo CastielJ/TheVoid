@@ -43,14 +43,24 @@ const { resetAuthTables, resetOrgTables } = await import("../../server/test/help
  * is a tracked follow-up, to be replaced with a real UI step once Phase 7
  * ships. Every other step (signup, org, Team, Void, Group, Task, assign,
  * authorized access, unauthorized denial) is driven through the browser.
+ *
+ * Updated for the post-launch refinement pass: signup now collects
+ * username/visibleName (identity display everywhere switched from raw
+ * email to "Visible Name (@username)"), and Group/Task creation switched
+ * from toolbar buttons to the double-click-on-canvas creation panel.
  */
 test.beforeEach(async () => {
   await resetOrgTables();
   await resetAuthTables();
 });
 
-async function signup(page: Page, email: string): Promise<void> {
+async function signup(
+  page: Page,
+  { email, username, visibleName }: { email: string; username: string; visibleName: string },
+): Promise<void> {
   await page.goto("/signup");
+  await page.fill("#visibleName", visibleName);
+  await page.fill("#username", username);
   await page.fill("#email", email);
   await page.fill("#password", "correct-horse-battery");
   await page.click('button[type="submit"]');
@@ -61,14 +71,20 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   browser,
 }) => {
   const stamp = Date.now();
+  // Kept short and distinct: username is capped at 20 chars, and a
+  // 13-digit epoch timestamp already leaves little room for a role prefix.
+  const shortStamp = String(stamp).slice(-10);
   const ownerEmail = `owner-${stamp}@example.com`;
   const memberEmail = `member-${stamp}@example.com`;
   const strangerEmail = `stranger-${stamp}@example.com`;
+  const ownerUsername = `own${shortStamp}`;
+  const memberUsername = `mem${shortStamp}`;
+  const strangerUsername = `str${shortStamp}`;
 
   // --- 1. signup (Owner) ----------------------------------------------------
   const ownerContext = await browser.newContext();
   const ownerPage = await ownerContext.newPage();
-  await signup(ownerPage, ownerEmail);
+  await signup(ownerPage, { email: ownerEmail, username: ownerUsername, visibleName: "Owner E2E" });
 
   // --- 2. create org ----------------------------------------------------------
   await ownerPage.fill("#org-name", "Acme E2E");
@@ -80,11 +96,19 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   // A second, independent user account — its own browser context/session.
   const memberContext = await browser.newContext();
   const memberPage = await memberContext.newPage();
-  await signup(memberPage, memberEmail);
+  await signup(memberPage, {
+    email: memberEmail,
+    username: memberUsername,
+    visibleName: "Member E2E",
+  });
 
   const strangerContext = await browser.newContext();
   const strangerPage = await strangerContext.newPage();
-  await signup(strangerPage, strangerEmail);
+  await signup(strangerPage, {
+    email: strangerEmail,
+    username: strangerUsername,
+    visibleName: "Stranger E2E",
+  });
 
   // --- 3. invite (seeded — see module docstring) -------------------------------
   const {
@@ -100,10 +124,12 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   await expect(ownerPage.getByTestId("team-name")).toHaveText("Engineering");
   await ownerPage.click('a:has-text("Manage")');
   await ownerPage.waitForURL("**/teams/*");
-  await expect(ownerPage.getByLabel("Add organization member")).toContainText(memberEmail);
-  await ownerPage.getByLabel("Add organization member").selectOption({ label: memberEmail });
+  await expect(ownerPage.getByLabel("Add organization member")).toContainText("Member E2E");
+  await ownerPage
+    .getByLabel("Add organization member")
+    .selectOption({ label: `Member E2E (@${memberUsername})` });
   await ownerPage.click('button:has-text("Add")');
-  await expect(ownerPage.getByText(memberEmail)).toBeVisible();
+  await expect(ownerPage.getByText("Member E2E")).toBeVisible();
 
   // --- 5. create Void, associated with that Team (D14 default Team grant) -----
   await ownerPage.goto(`/orgs/${orgId}`);
@@ -117,21 +143,27 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   const voidUrl = ownerPage.url();
   await ownerPage.waitForSelector('[data-testid="canvas-viewport"]');
 
-  // --- 6. create a Group -------------------------------------------------------
-  await ownerPage.click('button:has-text("+ Group")');
+  // --- 6. create a Group via double-click-to-create -----------------------------
+  await ownerPage.dblclick('[data-testid="canvas-viewport"]', { position: { x: 300, y: 200 } });
+  await ownerPage.click('button:has-text("Group")');
+  await ownerPage.fill('[aria-label="Group name"]', "Roadmap Group");
+  await ownerPage.click('button:has-text("Create Group")');
   await expect(ownerPage.locator('[data-testid="group-box"]')).toBeVisible();
 
-  // --- 7. create a Task --------------------------------------------------------
-  await ownerPage.click('button:has-text("+ Task")');
+  // --- 7. create a Task via double-click-to-create, away from the Group ---------
+  await ownerPage.dblclick('[data-testid="canvas-viewport"]', { position: { x: 300, y: 500 } });
+  await ownerPage.click('button:has-text("Task")');
+  await ownerPage.fill('[aria-label="Task title"]', "Ship the roadmap");
+  await ownerPage.click('button:has-text("Create Task")');
   await expect(ownerPage.locator('[data-testid="task-card"]')).toBeVisible();
 
-  // --- 8. assign the Task to the member ----------------------------------------
+  // --- 8. assign the Task to the member via the searchable assignee picker -----
   await ownerPage.dblclick('[data-testid="task-card"]');
   await ownerPage.waitForSelector('[data-testid="task-detail-panel"]');
-  await expect(ownerPage.getByLabel("Assign someone")).toContainText(memberEmail);
-  await ownerPage.getByLabel("Assign someone").selectOption({ label: memberEmail });
+  await ownerPage.getByLabel("Search members…").fill("Member E2E");
+  await ownerPage.getByText(`Member E2E @${memberUsername}`).click();
   await expect(
-    ownerPage.locator('[data-testid="task-detail-panel"]').getByText(memberEmail),
+    ownerPage.locator('[data-testid="task-detail-panel"]').getByText("Member E2E"),
   ).toBeVisible();
 
   // --- 9. authorized user (the member, via their Team's default grant) can access/edit it ---

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { trpc } from "../../trpc/client";
 import { AppShell } from "../../app/AppShell";
@@ -32,14 +32,34 @@ export function AccountPage() {
           <Link to="/orgs" style={{ fontSize: 13 }}>
             ← Organizations
           </Link>
-          <h1 style={{ fontSize: 22, marginTop: 4 }}>Account</h1>
-          <p style={{ color: "var(--color-text-muted)", fontSize: 13 }}>{me.data?.email}</p>
+          <h1 style={{ fontSize: 22, marginTop: 4, marginBottom: 4 }}>Account</h1>
+          {me.data && (
+            <p style={{ color: "var(--color-text-muted)", fontSize: 13, margin: 0 }}>
+              {me.data.visibleName} · @{me.data.username}
+            </p>
+          )}
         </div>
+
+        <section>
+          <h2 style={{ fontSize: 16 }}>Profile</h2>
+          {me.data && <ProfileSection email={me.data.email} visibleName={me.data.visibleName} />}
+        </section>
+
+        <section>
+          <h2 style={{ fontSize: 16 }}>Email verification</h2>
+          {me.data && (
+            <VerificationSection verified={me.data.emailVerified} email={me.data.email} />
+          )}
+        </section>
 
         <section>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h2 style={{ fontSize: 16 }}>Active sessions</h2>
-            <Button variant="secondary" onClick={() => revokeAllOthers.mutate()}>
+            <Button
+              variant="secondary"
+              loading={revokeAllOthers.isPending}
+              onClick={() => revokeAllOthers.mutate()}
+            >
               Log out other sessions
             </Button>
           </div>
@@ -73,6 +93,109 @@ export function AccountPage() {
   );
 }
 
+function ProfileSection({ email, visibleName }: { email: string; visibleName: string }) {
+  const utils = trpc.useUtils();
+  const [name, setName] = useState(visibleName);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => setName(visibleName), [visibleName]);
+
+  const update = trpc.auth.updateVisibleName.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1600);
+    },
+  });
+
+  return (
+    <Card>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || name === visibleName) return;
+          update.mutate({ visibleName: name.trim() });
+        }}
+        style={{ display: "flex", gap: 12, alignItems: "flex-end" }}
+      >
+        <div style={{ flex: 1 }}>
+          <FormField
+            label="Visible name"
+            htmlFor="account-visible-name"
+            hint="Username stays fixed for mentions/search — only this display name is editable."
+          >
+            <Input
+              id="account-visible-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={80}
+            />
+          </FormField>
+        </div>
+        <Button
+          type="submit"
+          loading={update.isPending}
+          disabled={!name.trim() || name === visibleName}
+          style={{ marginBottom: 16 }}
+        >
+          {saved ? "Saved" : "Save"}
+        </Button>
+      </form>
+      <p style={{ fontSize: 12, color: "var(--color-text-muted)", margin: 0 }}>{email}</p>
+    </Card>
+  );
+}
+
+function VerificationSection({ verified, email }: { verified: boolean; email: string }) {
+  const [sent, setSent] = useState(false);
+  const resend = trpc.auth.resendVerificationEmail.useMutation({
+    onSuccess: () => setSent(true),
+  });
+
+  if (verified) {
+    return (
+      <Card style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: "var(--color-success)",
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontSize: 13 }}>{email} is verified.</span>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: "var(--color-warning)",
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontSize: 13 }}>{email} is not verified.</span>
+      </div>
+      <Button
+        variant="secondary"
+        loading={resend.isPending}
+        disabled={sent}
+        onClick={() => resend.mutate()}
+      >
+        {sent ? "Email sent" : "Resend verification"}
+      </Button>
+    </Card>
+  );
+}
+
 function TwoFactorSection({ enabled }: { enabled: boolean }) {
   const utils = trpc.useUtils();
   const begin = trpc.auth.begin2FAEnrollment.useMutation();
@@ -90,7 +213,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
 
   if (enabled) {
     return (
-      <Card>
+      <Card className="void-fade-in">
         <p style={{ fontSize: 13 }}>Two-factor authentication is enabled on your account.</p>
         <form
           onSubmit={async (e) => {
@@ -119,7 +242,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
           <Button
             type="submit"
             variant="danger"
-            disabled={disable.isPending}
+            loading={disable.isPending}
             style={{ marginBottom: 16 }}
           >
             Disable
@@ -136,9 +259,17 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
 
   if (backupCodes) {
     return (
-      <Card>
+      <Card className="void-fade-in">
         <p style={{ fontSize: 13, fontWeight: 500 }}>Save these backup codes somewhere safe:</p>
-        <pre style={{ fontSize: 13, background: "var(--color-bg)", padding: 12, borderRadius: 6 }}>
+        <pre
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 13,
+            background: "var(--color-bg)",
+            padding: 12,
+            borderRadius: 6,
+          }}
+        >
           {backupCodes.join("\n")}
         </pre>
         <Button onClick={() => setBackupCodes(null)}>Done</Button>
@@ -148,11 +279,13 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
 
   if (begin.data) {
     return (
-      <Card>
+      <Card className="void-fade-in">
         <p style={{ fontSize: 13 }}>
           Scan this in your authenticator app, or enter the secret manually:
         </p>
-        <code style={{ fontSize: 13, wordBreak: "break-all" }}>{begin.data.secret}</code>
+        <code style={{ fontFamily: "var(--font-mono)", fontSize: 13, wordBreak: "break-all" }}>
+          {begin.data.secret}
+        </code>
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -177,7 +310,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
               />
             </FormField>
           </div>
-          <Button type="submit" disabled={confirm.isPending} style={{ marginBottom: 16 }}>
+          <Button type="submit" loading={confirm.isPending} style={{ marginBottom: 16 }}>
             Confirm
           </Button>
         </form>
@@ -193,7 +326,7 @@ function TwoFactorSection({ enabled }: { enabled: boolean }) {
   return (
     <Card>
       <p style={{ fontSize: 13 }}>Two-factor authentication is not enabled.</p>
-      <Button onClick={() => begin.mutate()} disabled={begin.isPending}>
+      <Button loading={begin.isPending} onClick={() => begin.mutate()}>
         Enable 2FA
       </Button>
     </Card>

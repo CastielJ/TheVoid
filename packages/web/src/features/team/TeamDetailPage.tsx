@@ -95,7 +95,10 @@ export function TeamDetailPage() {
                 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
               >
                 <div>
-                  <div>{m.email}</div>
+                  <div>
+                    {m.visibleName}{" "}
+                    <span style={{ color: "var(--color-text-muted)" }}>@{m.username}</span>
+                  </div>
                   {m.isTeamLead && (
                     <div style={{ fontSize: 12, color: "var(--color-accent-hover)" }}>
                       Team Lead
@@ -152,7 +155,7 @@ export function TeamDetailPage() {
                     <option value="">Select a member…</option>
                     {availableToAdd?.map((om) => (
                       <option key={om.userId} value={om.userId}>
-                        {om.email}
+                        {om.visibleName} (@{om.username})
                       </option>
                     ))}
                   </select>

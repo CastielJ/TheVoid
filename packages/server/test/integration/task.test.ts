@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { pool, db } from "../../src/db/client.js";
 import { taskActivities } from "../../src/db/schema.js";
-import { createUser } from "../../src/domains/auth/users.js";
+import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
 import { createVoid } from "../../src/domains/void/voids.js";
 import { createGroup } from "../../src/domains/group/groups.js";
@@ -19,6 +19,7 @@ import {
   addChecklistItem,
   listChecklistItemsForTask,
 } from "../../src/domains/task/checklistItems.js";
+import { assignTagsToTask, listTagsForTask } from "../../src/domains/tag/tags.js";
 import { resetAuthTables, resetOrgTables } from "../helpers/db.js";
 
 describe("Task domain (implementation-plan.md Phase 4)", () => {
@@ -155,15 +156,14 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
   });
 
   it("duplicateTask (ID5): new ID, copies title/description/priority/tags/group_id/checklist (reset unchecked), resets status, does not copy assignees/comments/activity", async () => {
-    const { owner, void: v } = await setupVoid();
+    const { owner, org, void: v } = await setupVoid();
     const group = await createGroup({ voidId: v.id, name: "G", x: 0, y: 0, width: 10, height: 10 });
     const created = await createTask(
       {
         voidId: v.id,
         title: "Original",
         description: "Desc",
-        priority: "urgent",
-        tags: ["a", "b"],
+        priority: "highest",
         groupId: group.id,
         x: 10,
         y: 10,
@@ -171,6 +171,7 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
       owner.id,
     );
     if (!created.ok) throw new Error("unreachable");
+    await assignTagsToTask(created.task.id, ["a", "b"], owner.id);
     await updateTask(created.task.id, { status: "done" }, owner.id);
     await addChecklistItem(created.task.id, "Item 1");
     await addChecklistItem(created.task.id, "Item 2");
@@ -182,11 +183,19 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
     expect(duplicated.task.id).not.toBe(created.task.id);
     expect(duplicated.task.title).toBe("Original");
     expect(duplicated.task.description).toBe("Desc");
-    expect(duplicated.task.priority).toBe("urgent");
-    expect(duplicated.task.tags).toEqual(["a", "b"]);
+    expect(duplicated.task.priority).toBe("highest");
     expect(duplicated.task.groupId).toBe(group.id);
     // Status resets to default, not copied from the (now 'done') original.
     expect(duplicated.task.status).toBe("todo");
+
+    // ID5: tags are copied as the same shared Tag associations, never new
+    // Tag rows — the duplicated Task's tags should be the exact same Tag
+    // ids/org as the original's, since Tags are shared Organization
+    // vocabulary (org unused here beyond documenting that scope).
+    const originalTags = await listTagsForTask(created.task.id);
+    const duplicatedTags = await listTagsForTask(duplicated.task.id);
+    expect(duplicatedTags.map((t) => t.id).sort()).toEqual(originalTags.map((t) => t.id).sort());
+    expect(duplicatedTags.every((t) => t.organizationId === org.id)).toBe(true);
 
     const items = await listChecklistItemsForTask(duplicated.task.id);
     expect(items).toHaveLength(2);

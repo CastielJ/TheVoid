@@ -61,6 +61,8 @@ export const organizationRouter = router({
       return rows.map(({ membership, user }) => ({
         userId: user.id,
         email: user.email,
+        username: user.username,
+        visibleName: user.visibleName,
         role: membership.role,
         joinedAt: membership.createdAt,
       }));

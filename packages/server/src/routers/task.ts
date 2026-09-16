@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
+import { taskPriorityValues } from "@void/shared";
 import { protectedProcedure, requireCapability, router } from "../trpc.js";
 import { db } from "../db/client.js";
 import { taskActivities } from "../db/schema.js";
@@ -36,11 +37,13 @@ import {
   editComment,
   deleteComment,
 } from "../domains/task/comments.js";
+import { assignTagsToTask, listTagsForTask } from "../domains/tag/tags.js";
 import { publishVoidEvent } from "../realtime/broadcast.js";
 
 const taskIdInput = z.object({ taskId: z.string().uuid() });
-const priorityEnum = z.enum(["low", "medium", "high", "urgent"]);
+const priorityEnum = z.enum(taskPriorityValues);
 const statusEnum = z.enum(["todo", "in_progress", "done", "blocked"]);
+const tagNamesInput = z.array(z.string().trim().min(1).max(40)).max(20);
 
 export const taskRouter = router({
   create: protectedProcedure
@@ -51,7 +54,7 @@ export const taskRouter = router({
         description: z.string().optional(),
         priority: priorityEnum.optional(),
         dueDate: z.string().optional(),
-        tags: z.array(z.string()).optional(),
+        tagNames: tagNamesInput.optional(),
         groupId: z.string().uuid().optional(),
         x: z.number(),
         y: z.number(),
@@ -59,12 +62,16 @@ export const taskRouter = router({
     )
     .use(requireCapability(canEditVoid, (input: { voidId: string }) => input.voidId))
     .mutation(async ({ ctx, input }) => {
-      const result = await createTask(input, ctx.session.user.id);
+      const { tagNames, ...taskInput } = input;
+      const result = await createTask(taskInput, ctx.session.user.id);
       if (!result.ok) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "That Group does not belong to this Void.",
         });
+      }
+      if (tagNames && tagNames.length > 0) {
+        await assignTagsToTask(result.task.id, tagNames, ctx.session.user.id);
       }
       publishVoidEvent(input.voidId, "task.created", result.task);
       return result.task;
@@ -103,14 +110,17 @@ export const taskRouter = router({
         status: statusEnum.optional(),
         priority: priorityEnum.nullable().optional(),
         dueDate: z.string().nullable().optional(),
-        tags: z.array(z.string()).nullable().optional(),
+        tagNames: tagNamesInput.optional(),
       }),
     )
     .use(requireCapability(canEditVoidForTask, (input: { taskId: string }) => input.taskId))
     .mutation(async ({ ctx, input }) => {
-      const { taskId, ...changes } = input;
+      const { taskId, tagNames, ...changes } = input;
       const task = await updateTask(taskId, changes, ctx.session.user.id);
       if (!task) throw new TRPCError({ code: "NOT_FOUND" });
+      if (tagNames !== undefined) {
+        await assignTagsToTask(taskId, tagNames, ctx.session.user.id);
+      }
       publishVoidEvent(task.voidId, "task.updated", task);
       return task;
     }),
@@ -198,6 +208,13 @@ export const taskRouter = router({
     .use(requireCapability(canAccessVoidForTask, (input: { taskId: string }) => input.taskId))
     .query(async ({ input }) => {
       return listAssigneesForTask(input.taskId);
+    }),
+
+  listTags: protectedProcedure
+    .input(taskIdInput)
+    .use(requireCapability(canAccessVoidForTask, (input: { taskId: string }) => input.taskId))
+    .query(async ({ input }) => {
+      return listTagsForTask(input.taskId);
     }),
 
   listActivity: protectedProcedure

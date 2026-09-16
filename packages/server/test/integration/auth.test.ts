@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import * as OTPAuth from "otpauth";
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { TRPCClientError } from "@trpc/client";
 import { buildApp } from "../../src/app.js";
@@ -7,6 +8,11 @@ import { pool } from "../../src/db/client.js";
 import { emailSender } from "../../src/email/index.js";
 import { createTestClient } from "../helpers/client.js";
 import { resetAuthTables } from "../helpers/db.js";
+
+/** Mirrors password.ts's own HIBP request shape (SHA-1, k-anonymity). */
+function hibpSuffixFor(password: string): string {
+  return createHash("sha1").update(password).digest("hex").toUpperCase().slice(5);
+}
 
 /**
  * Phase 1 verification (docs/implementation-plan.md §2 Phase 1 / §9 Tier 2):
@@ -43,6 +49,8 @@ describe("Phase 1: auth flows", () => {
 
     await client.auth.signup.mutate({
       email: "alice@example.com",
+      username: "alice",
+      visibleName: "Alice",
       password: "correct-horse-battery",
     });
     expect(sendSpy).toHaveBeenCalledWith(
@@ -62,12 +70,48 @@ describe("Phase 1: auth flows", () => {
 
     const me = await client.auth.me.query();
     expect(me.email).toBe("alice@example.com");
+    expect(me.username).toBe("alice");
+    expect(me.visibleName).toBe("Alice");
+    expect(me.emailVerified).toBe(true);
+  });
+
+  it("resendVerificationEmail issues a fresh token that supersedes the original, and no-ops once already verified", async () => {
+    const { client } = createTestClient(app);
+    await client.auth.signup.mutate({
+      email: "judy@example.com",
+      username: "judy",
+      visibleName: "Judy",
+      password: "correct-horse-battery",
+    });
+    await client.auth.login.mutate({
+      email: "judy@example.com",
+      password: "correct-horse-battery",
+    });
+
+    const firstToken = lastTokenSentFor("email_verification");
+    await client.auth.resendVerificationEmail.mutate();
+    const secondToken = lastTokenSentFor("email_verification");
+    expect(secondToken).not.toBe(firstToken);
+
+    // The superseded first token must no longer work (issueAuthToken
+    // revokes any prior outstanding token of the same purpose, C4).
+    await expect(client.auth.verifyEmail.mutate({ token: firstToken })).rejects.toThrow(
+      TRPCClientError,
+    );
+    await client.auth.verifyEmail.mutate({ token: secondToken });
+
+    // Once verified, resending is a no-op (no new email sent).
+    sendSpy.mockClear();
+    await client.auth.resendVerificationEmail.mutate();
+    expect(sendSpy).not.toHaveBeenCalled();
   });
 
   it("rejects login with the wrong password", async () => {
     const { client } = createTestClient(app);
     await client.auth.signup.mutate({
       email: "bob@example.com",
+      username: "bob",
+      visibleName: "Bob",
       password: "correct-horse-battery",
     });
 
@@ -80,6 +124,8 @@ describe("Phase 1: auth flows", () => {
     const { client } = createTestClient(app);
     await client.auth.signup.mutate({
       email: "carol@example.com",
+      username: "carol",
+      visibleName: "Carol",
       password: "correct-horse-battery",
     });
     sendSpy.mockClear();
@@ -87,9 +133,110 @@ describe("Phase 1: auth flows", () => {
     // Second signup for the same email must not error and must not send
     // a second verification email (would leak account existence).
     await expect(
-      client.auth.signup.mutate({ email: "carol@example.com", password: "another-password-1" }),
+      client.auth.signup.mutate({
+        email: "carol@example.com",
+        username: "carol2",
+        visibleName: "Carol",
+        password: "another-password-1",
+      }),
     ).resolves.toEqual({ ok: true });
     expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("signup rejects a username that is already taken", async () => {
+    const { client } = createTestClient(app);
+    await client.auth.signup.mutate({
+      email: "carol-a@example.com",
+      username: "carolduplicate",
+      visibleName: "Carol A",
+      password: "correct-horse-battery",
+    });
+
+    await expect(
+      client.auth.signup.mutate({
+        email: "carol-b@example.com",
+        username: "carolduplicate",
+        visibleName: "Carol B",
+        password: "correct-horse-battery",
+      }),
+    ).rejects.toThrow(TRPCClientError);
+  });
+
+  it("breached-password: rejected without acknowledgeBreach, accepted with it — and the check runs for real on both submissions, not skipped when acknowledgeBreach is true", async () => {
+    const { client } = createTestClient(app);
+    const originalFetch = global.fetch;
+    const suffix = hibpSuffixFor("aaaaaaaaaaaa");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => `${suffix}:1`,
+    } as Response);
+    global.fetch = fetchSpy;
+
+    try {
+      await expect(
+        client.auth.signup.mutate({
+          email: "breach-test@example.com",
+          username: "breachtest",
+          visibleName: "Breach Test",
+          password: "aaaaaaaaaaaa",
+        }),
+      ).rejects.toMatchObject({ data: { code: "PRECONDITION_FAILED" } });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      await expect(
+        client.auth.signup.mutate({
+          email: "breach-test@example.com",
+          username: "breachtest",
+          visibleName: "Breach Test",
+          password: "aaaaaaaaaaaa",
+          acknowledgeBreach: true,
+        }),
+      ).resolves.toEqual({ ok: true });
+      // The invariant under test: the HIBP check must run unconditionally
+      // on every submission, even when acknowledgeBreach=true — the flag
+      // only changes what happens with the result, it must never
+      // short-circuit the check itself.
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("breached-password: acknowledgeBreach=true on a genuinely non-breached password still succeeds", async () => {
+    const { client } = createTestClient(app);
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:2",
+    } as Response);
+
+    try {
+      await expect(
+        client.auth.signup.mutate({
+          email: "not-breached@example.com",
+          username: "notbreached",
+          visibleName: "Not Breached",
+          password: "aaaaaaaaaaaa",
+          acknowledgeBreach: true,
+        }),
+      ).resolves.toEqual({ ok: true });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("breached-password: a too-short password is rejected regardless of acknowledgeBreach", async () => {
+    const { client } = createTestClient(app);
+
+    await expect(
+      client.auth.signup.mutate({
+        email: "short-pw@example.com",
+        username: "shortpw",
+        visibleName: "Short PW",
+        password: "short1",
+        acknowledgeBreach: true,
+      }),
+    ).rejects.toMatchObject({ data: { code: "BAD_REQUEST" } });
   });
 
   it("magic-link login creates an account on first request and authenticates", async () => {
@@ -116,6 +263,8 @@ describe("Phase 1: auth flows", () => {
     const { client } = createTestClient(app);
     await client.auth.signup.mutate({
       email: "frank@example.com",
+      username: "frank",
+      visibleName: "Frank",
       password: "correct-horse-battery",
     });
     await client.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
@@ -150,6 +299,8 @@ describe("Phase 1: auth flows", () => {
     const { client } = createTestClient(app);
     await client.auth.signup.mutate({
       email: "grace@example.com",
+      username: "grace",
+      visibleName: "Grace",
       password: "correct-horse-battery",
     });
     await client.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
@@ -193,6 +344,8 @@ describe("Phase 1: auth flows", () => {
     const { client } = createTestClient(app);
     await client.auth.signup.mutate({
       email: "heidi@example.com",
+      username: "heidi",
+      visibleName: "Heidi",
       password: "correct-horse-battery",
     });
     await client.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
@@ -249,6 +402,8 @@ describe("Phase 1: auth flows", () => {
     const { client: sessionA } = createTestClient(app);
     await sessionA.auth.signup.mutate({
       email: "ivan@example.com",
+      username: "ivan",
+      visibleName: "Ivan",
       password: "correct-horse-battery",
     });
     await sessionA.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });

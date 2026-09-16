@@ -5,7 +5,15 @@ import type { Group } from "../trpc/types";
 
 const MIN_SIZE = 80;
 
-export function GroupBox({ group, zoom }: { group: Group; zoom: number }) {
+export function GroupBox({
+  group,
+  zoom,
+  onOpen,
+}: {
+  group: Group;
+  zoom: number;
+  onOpen: (groupId: string) => void;
+}) {
   const isSelected = useCanvasStore((s) => s.isSelected("group", group.id));
   const select = useCanvasStore((s) => s.select);
   const setLocalPosition = useCanvasStore((s) => s.setLocalPosition);
@@ -102,6 +110,10 @@ export function GroupBox({ group, zoom }: { group: Group; zoom: number }) {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onOpen(group.id);
+      }}
       style={{
         position: "absolute",
         left: group.x,
@@ -114,6 +126,8 @@ export function GroupBox({ group, zoom }: { group: Group; zoom: number }) {
         cursor: "grab",
         userSelect: "none",
         touchAction: "none",
+        transition:
+          "border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard)",
       }}
     >
       <span

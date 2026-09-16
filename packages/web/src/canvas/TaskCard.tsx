@@ -96,6 +96,8 @@ export function TaskCard({
         cursor: "grab",
         userSelect: "none",
         touchAction: "none",
+        transition:
+          "border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard)",
       }}
     >
       <div

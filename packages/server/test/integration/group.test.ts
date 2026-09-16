@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { pool } from "../../src/db/client.js";
-import { createUser } from "../../src/domains/auth/users.js";
+import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
 import { createVoid, deleteVoid } from "../../src/domains/void/voids.js";
 import {

@@ -69,6 +69,8 @@ export const teamRouter = router({
       return rows.map(({ teamMembership, user }) => ({
         userId: user.id,
         email: user.email,
+        username: user.username,
+        visibleName: user.visibleName,
         isTeamLead: teamMembership.isTeamLead,
       }));
     }),

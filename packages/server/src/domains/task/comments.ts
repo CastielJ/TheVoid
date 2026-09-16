@@ -2,7 +2,7 @@ import { eq, and, isNull } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { comments, type Comment } from "../../db/schema.js";
 import { findTaskById } from "./tasks.js";
-import { findUserByEmail } from "../auth/users.js";
+import { findUserByUsername } from "../auth/users.js";
 import { canAccessVoid } from "../../authorization/capabilities.js";
 import { createNotification } from "../notification/notifications.js";
 import { findVoidById } from "../void/voids.js";
@@ -20,19 +20,16 @@ export async function findCommentById(commentId: string): Promise<Comment | null
   return row ?? null;
 }
 
-const MENTION_PATTERN = /@([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+// Post-launch refinement pass: mentions switched from `@` + full email to
+// `@` + username, now that every User has a stable username (D39's original
+// email-based syntax predates that field entirely). Same non-matching
+// semantics as before: a mention only produces a notification for a User
+// who (a) has an account and (b) currently has access to the Task's Void —
+// mirrors C8/the assignment-eligibility principle, so a comment can't be
+// used to probe for or notify unrelated accounts.
+const MENTION_PATTERN = /@([a-z0-9_]{3,20})/g;
 
-/**
- * D39/ID (Phase 6 decisions.md note deferring this): mention syntax is
- * settled here, at the point Notifications actually exist to consume it —
- * `User` has no `@handle`, only email, so a mention is literally `@` followed
- * by the mentioned person's email address. Deliberately not resolving
- * against arbitrary emails: a mention only produces a notification for a
- * User who (a) has an account and (b) currently has access to the Task's
- * Void — mirrors C8/the assignment-eligibility principle, so a comment
- * can't be used to probe for or notify unrelated accounts.
- */
-export function parseMentionedEmails(body: string): string[] {
+export function parseMentionedUsernames(body: string): string[] {
   const matches = body.matchAll(MENTION_PATTERN);
   return [...new Set([...matches].map((m) => m[1]!.toLowerCase()))];
 }
@@ -44,11 +41,11 @@ export async function addComment(taskId: string, authorId: string, body: string)
     const [comment] = await tx.insert(comments).values({ taskId, authorId, body }).returning();
 
     if (task) {
-      const mentionedEmails = parseMentionedEmails(body);
-      if (mentionedEmails.length > 0) {
+      const mentionedUsernames = parseMentionedUsernames(body);
+      if (mentionedUsernames.length > 0) {
         const voidRow = await findVoidById(task.voidId);
-        for (const email of mentionedEmails) {
-          const mentionedUser = await findUserByEmail(email);
+        for (const username of mentionedUsernames) {
+          const mentionedUser = await findUserByUsername(username);
           if (!mentionedUser || mentionedUser.id === authorId) continue;
           if (!(await canAccessVoid(mentionedUser.id, task.voidId))) continue;
 

@@ -73,6 +73,7 @@ export function NotificationBell() {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
+        className="void-icon-btn"
         style={{
           position: "relative",
           background: "none",
@@ -106,6 +107,7 @@ export function NotificationBell() {
       </button>
       {open && (
         <div
+          className="void-pop-in"
           style={{
             position: "absolute",
             top: "calc(100% + 4px)",
@@ -118,6 +120,7 @@ export function NotificationBell() {
             maxHeight: 400,
             overflowY: "auto",
             zIndex: 20,
+            transformOrigin: "top right",
           }}
         >
           <div

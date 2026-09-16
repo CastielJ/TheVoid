@@ -11,6 +11,7 @@ import {
 } from "../../db/schema.js";
 import { recordTaskActivity } from "./taskActivity.js";
 import { listAccessibleVoids } from "../void/voids.js";
+import { copyTaskTags } from "../tag/tags.js";
 
 export interface CreateTaskInput {
   voidId: string;
@@ -18,7 +19,6 @@ export interface CreateTaskInput {
   description?: string;
   priority?: TaskPriority;
   dueDate?: string;
-  tags?: string[];
   groupId?: string | null;
   x: number;
   y: number;
@@ -48,7 +48,6 @@ export async function createTask(
       description: input.description,
       priority: input.priority,
       dueDate: input.dueDate,
-      tags: input.tags,
       x: input.x,
       y: input.y,
       createdBy: creatorUserId,
@@ -107,7 +106,6 @@ export interface UpdateTaskInput {
   status?: TaskStatus;
   priority?: TaskPriority | null;
   dueDate?: string | null;
-  tags?: string[] | null;
 }
 
 /** Content fields only — position/grouping go through moveTask below. */
@@ -225,14 +223,16 @@ export type DuplicateTaskResult = { ok: true; task: Task } | { ok: false; reason
  * ID5: new ID; copies title/description/priority/tags/group_id/checklist
  * items (reset unchecked); does NOT copy assignees, comments, or activity
  * history; status resets to default (`todo`). Same-Void only (D56) — this
- * function has no target-Void parameter at all.
+ * function has no target-Void parameter at all. Tags are copied as the same
+ * shared Tag associations (copyTaskTags), never new Tag rows, since Tags
+ * are Organization-scoped shared vocabulary, not per-Task data.
  */
 export async function duplicateTask(taskId: string, actorId: string): Promise<DuplicateTaskResult> {
   const existing = await findTaskById(taskId);
   if (!existing || existing.deletedAt) return { ok: false, reason: "not_found" as const };
 
-  return db.transaction(async (tx) => {
-    const [newTask] = await tx
+  const newTask = await db.transaction(async (tx) => {
+    const [inserted] = await tx
       .insert(tasks)
       .values({
         voidId: existing.voidId,
@@ -240,7 +240,6 @@ export async function duplicateTask(taskId: string, actorId: string): Promise<Du
         title: existing.title,
         description: existing.description,
         priority: existing.priority,
-        tags: existing.tags,
         // Small offset so the copy doesn't render exactly on top of the original.
         x: existing.x + 20,
         y: existing.y + 20,
@@ -252,7 +251,7 @@ export async function duplicateTask(taskId: string, actorId: string): Promise<Du
     if (items.length > 0) {
       await tx.insert(checklistItems).values(
         items.map((item) => ({
-          taskId: newTask!.id,
+          taskId: inserted!.id,
           label: item.label,
           isComplete: false,
           position: item.position,
@@ -260,6 +259,10 @@ export async function duplicateTask(taskId: string, actorId: string): Promise<Du
       );
     }
 
-    return { ok: true as const, task: newTask! };
+    return inserted!;
   });
+
+  await copyTaskTags(taskId, newTask.id);
+
+  return { ok: true as const, task: newTask };
 }

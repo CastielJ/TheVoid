@@ -15,6 +15,7 @@ import {
   integer,
   primaryKey,
 } from "drizzle-orm/pg-core";
+import { taskPriorityValues as sharedTaskPriorityValues } from "@void/shared";
 
 /**
  * Phase 1 — Identity Foundation (docs/implementation-plan.md §2 Phase 1;
@@ -26,6 +27,13 @@ export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
   emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  // Post-launch refinement pass: stable, unique mention/search/lookup
+  // identifier. Lowercase-normalized on write (domains/auth/users.ts),
+  // matching the existing `email` convention — a plain unique() index on
+  // the already-normalized value, not a functional index.
+  username: text("username").notNull().unique(),
+  // Human-readable display name, editable independently of username.
+  visibleName: text("visible_name").notNull(),
   // Nullable: magic-link-only users may never set a password (D19).
   passwordHash: text("password_hash"),
   // Nullable, only set once TOTP 2FA is enrolled (D23).
@@ -320,7 +328,11 @@ export type Group = typeof groups.$inferSelect;
  */
 
 export const taskStatusValues = ["todo", "in_progress", "done", "blocked"] as const;
-export const taskPriorityValues = ["low", "medium", "high", "urgent"] as const;
+// Post-launch refinement pass: value list now lives in @void/shared (the
+// single source of truth server and web both import), not declared here —
+// re-exported under the same name so every existing `taskPriorityValues`
+// reference in this file keeps working unchanged.
+export const taskPriorityValues = sharedTaskPriorityValues;
 
 export const tasks = pgTable(
   "tasks",
@@ -340,7 +352,6 @@ export const tasks = pgTable(
     dueDate: date("due_date"),
     x: doublePrecision("x").notNull(),
     y: doublePrecision("y").notNull(),
-    tags: text("tags").array(),
     // Server-assigned, incremented on every update (ID14) — not exercised
     // until Phase 5 wires up broadcasts.
     version: bigint("version", { mode: "number" }).notNull().default(1),
@@ -451,6 +462,75 @@ export type TaskAssignee = typeof taskAssignees.$inferSelect;
 export type ChecklistItem = typeof checklistItems.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type TaskActivity = typeof taskActivities.$inferSelect;
+
+/**
+ * Post-launch refinement pass — Organization-scoped Tags. Reusable across
+ * every Void in an Organization (not duplicated per-Void); created inline
+ * while editing a Task/Group, gated by that resource's own Editor+ Void
+ * capability (canEditVoidForTask/canEditVoidForGroup) — no separate
+ * "manage tags" capability exists. A Tag's existence never grants access to
+ * anything: it is a plain Organization-scoped data row, not an access-
+ * control mechanism (Non-negotiable #4 is unaffected by this table).
+ */
+export const tags = pgTable(
+  "tags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("tags_organization_id_idx").on(table.organizationId),
+    // Case-insensitive per-Organization dedup — findOrCreateTag
+    // (domains/tag/tags.ts) relies on this to make "create if missing" safe
+    // under concurrent requests (unique-violation retry), not just an
+    // application-layer check.
+    uniqueIndex("tags_organization_id_name_idx").on(
+      table.organizationId,
+      sql`lower(${table.name})`,
+    ),
+  ],
+);
+
+export const taskTags = pgTable(
+  "task_tags",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.taskId, table.tagId] }),
+    index("task_tags_tag_id_idx").on(table.tagId),
+  ],
+);
+
+export const groupTags = pgTable(
+  "group_tags",
+  {
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => groups.id, { onDelete: "cascade" }),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.groupId, table.tagId] }),
+    index("group_tags_tag_id_idx").on(table.tagId),
+  ],
+);
+
+export type Tag = typeof tags.$inferSelect;
 
 // Phase 6 (docs/implementation-plan.md §2; D31): personal, per-Void-per-User
 // camera state — never shared between users, distinct from the

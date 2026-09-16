@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import { taskPriorityValues, taskPriorityLabels } from "@void/shared";
 import { trpc } from "../trpc/client";
 import { useCanvasStore } from "./store";
 import { Button } from "../ui/Button";
-import { Input } from "../ui/Input";
+import { TagPicker } from "./TagPicker";
+import { AssigneePicker } from "./AssigneePicker";
 
 const STATUS_OPTIONS = ["todo", "in_progress", "done", "blocked"] as const;
-const PRIORITY_OPTIONS = ["low", "medium", "high", "urgent"] as const;
 
 export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const task = useCanvasStore((s) => s.tasks.get(taskId));
@@ -16,12 +17,10 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
   const utils = trpc.useUtils();
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
-  const [tagsText, setTagsText] = useState((task?.tags ?? []).join(", "));
 
   useEffect(() => {
     setTitle(task?.title ?? "");
     setDescription(task?.description ?? "");
-    setTagsText((task?.tags ?? []).join(", "));
   }, [task?.id]);
 
   const update = trpc.task.update.useMutation({
@@ -38,21 +37,18 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
   });
 
   const assignees = trpc.task.listAssignees.useQuery({ taskId });
-  const grants = trpc.void.listAccessGrants.useQuery(
+  const tags = trpc.task.listTags.useQuery({ taskId });
+  const setTagNames = trpc.task.update.useMutation({
+    onSuccess: () => utils.task.listTags.invalidate({ taskId }),
+  });
+
+  // Unfiltered fetch gives a full display-identity map for this Void — used
+  // to render assigned users' names, not just the picker's own search results.
+  const members = trpc.void.listEligibleMembers.useQuery(
     { voidId: voidId! },
-    { enabled: Boolean(voidId), retry: false },
+    { enabled: Boolean(voidId) },
   );
-  // A Void's access grants can target a Team, not just a User directly
-  // (D14) — eligible assignees must include every member of any granted
-  // Team, or a Manager could never assign a Task to someone whose access
-  // comes entirely through Team membership (the common case for a
-  // Team-associated Void).
-  const teamGrantIds = [
-    ...new Set((grants.data ?? []).filter((g) => g.teamId).map((g) => g.teamId!)),
-  ];
-  const teamMemberQueries = trpc.useQueries((t) =>
-    teamGrantIds.map((teamId) => t.team.listMembers({ teamId })),
-  );
+  const memberByUserId = new Map((members.data ?? []).map((m) => [m.userId, m]));
 
   const assign = trpc.task.assign.useMutation({
     onSuccess: () => utils.task.listAssignees.invalidate({ taskId }),
@@ -82,28 +78,15 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
   });
   const [newComment, setNewComment] = useState("");
 
-  const eligibleUserIds = new Set(
-    (grants.data ?? []).filter((g) => g.userId).map((g) => g.userId!),
-  );
-  // Team-membership queries are also the only source of email addresses
-  // available here (direct user-grants carry no email) — used to render
-  // human-readable names instead of raw UUIDs wherever we have one.
-  const emailByUserId = new Map<string, string>();
-  for (const query of teamMemberQueries) {
-    for (const member of query.data ?? []) {
-      eligibleUserIds.add(member.userId);
-      emailByUserId.set(member.userId, member.email);
-    }
-  }
-  const assignedUserIds = new Set(
-    (assignees.data ?? []).filter((a) => a.assigneeActive).map((a) => a.userId),
-  );
-  const candidateUserIds = [...eligibleUserIds].filter((id) => !assignedUserIds.has(id));
+  const activeAssigneeIds = (assignees.data ?? [])
+    .filter((a) => a.assigneeActive)
+    .map((a) => a.userId);
 
   if (!task) return null;
 
   return (
     <aside
+      className="void-panel-in"
       style={{
         position: "absolute",
         top: 0,
@@ -141,6 +124,7 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
         <button
           onClick={onClose}
           aria-label="Close"
+          className="void-icon-btn"
           style={{
             background: "none",
             border: "none",
@@ -196,15 +180,15 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
             onChange={(e) =>
               update.mutate({
                 taskId,
-                priority: (e.target.value || null) as (typeof PRIORITY_OPTIONS)[number] | null,
+                priority: (e.target.value || null) as (typeof taskPriorityValues)[number] | null,
               })
             }
             style={selectStyle}
           >
             <option value="">—</option>
-            {PRIORITY_OPTIONS.map((p) => (
+            {taskPriorityValues.map((p) => (
               <option key={p} value={p}>
-                {p}
+                {taskPriorityLabels[p]}
               </option>
             ))}
           </select>
@@ -221,26 +205,14 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
         />
       </Field>
 
-      <Field label="Tags (comma-separated)">
-        <Input
-          aria-label="Tags (comma-separated)"
-          value={tagsText}
-          onChange={(e) => setTagsText(e.target.value)}
-          onBlur={() =>
-            update.mutate({
-              taskId,
-              tags: tagsText
-                .split(",")
-                .map((t: string) => t.trim())
-                .filter(Boolean),
-            })
-          }
-          style={{
-            background: "var(--canvas-bg)",
-            color: "var(--canvas-text)",
-            borderColor: "var(--canvas-border)",
-          }}
-        />
+      <Field label="Tags">
+        {voidId && (
+          <TagPicker
+            voidId={voidId}
+            selected={(tags.data ?? []).map((t) => t.name)}
+            onChange={(names) => setTagNames.mutate({ taskId, tagNames: names })}
+          />
+        )}
       </Field>
 
       <section>
@@ -248,47 +220,38 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {assignees.data
             ?.filter((a) => a.assigneeActive)
-            .map((a) => (
-              <div key={a.userId} style={rowStyle}>
-                <span style={{ fontSize: 13 }}>
-                  {emailByUserId.get(a.userId) ?? `${a.userId.slice(0, 8)}…`}
-                </span>
-                <Button
-                  variant="ghost"
-                  onClick={() => unassign.mutate({ taskId, userId: a.userId })}
-                >
-                  Remove
-                </Button>
-              </div>
-            ))}
+            .map((a) => {
+              const member = memberByUserId.get(a.userId);
+              return (
+                <div key={a.userId} style={rowStyle} className="void-fade-in">
+                  <span style={{ fontSize: 13 }}>
+                    {member
+                      ? `${member.visibleName} (@${member.username})`
+                      : `${a.userId.slice(0, 8)}…`}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    onClick={() => unassign.mutate({ taskId, userId: a.userId })}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              );
+            })}
           {assignees.data?.some((a) => !a.assigneeActive) && (
             <p style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
               (some assignees are inactive — the member left the Organization)
             </p>
           )}
         </div>
-        {grants.isSuccess && candidateUserIds.length > 0 && (
-          <select
-            aria-label="Assign someone"
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value) assign.mutate({ taskId, userId: e.target.value });
-              e.target.value = "";
-            }}
-            style={{ ...selectStyle, marginTop: 8 }}
-          >
-            <option value="">Assign someone…</option>
-            {candidateUserIds.map((id) => (
-              <option key={id} value={id}>
-                {emailByUserId.get(id) ?? `${id.slice(0, 8)}…`}
-              </option>
-            ))}
-          </select>
-        )}
-        {grants.isError && (
-          <p style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
-            Only a Void Manager can assign people to Tasks.
-          </p>
+        {voidId && (
+          <div style={{ marginTop: 8 }}>
+            <AssigneePicker
+              voidId={voidId}
+              excludeUserIds={activeAssigneeIds}
+              onSelect={(userId) => assign.mutate({ taskId, userId })}
+            />
+          </div>
         )}
       </section>
 
@@ -309,6 +272,8 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
                   style={{
                     textDecoration: item.isComplete ? "line-through" : "none",
                     fontSize: 13,
+                    transition: "opacity var(--motion-fast) var(--ease-standard)",
+                    opacity: item.isComplete ? 0.6 : 1,
                   }}
                 >
                   {item.label}
@@ -352,6 +317,7 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
           {comments.data?.map((c) => (
             <div
               key={c.id}
+              className="void-fade-in"
               style={{ fontSize: 13, background: "var(--canvas-bg)", borderRadius: 6, padding: 8 }}
             >
               {c.body}
@@ -370,7 +336,7 @@ export function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: 
             aria-label="Write a comment"
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
-            placeholder="Write a comment…"
+            placeholder="Write a comment… (@username to mention)"
             style={{ ...selectStyle, flex: 1 }}
           />
           <Button type="submit" variant="secondary">

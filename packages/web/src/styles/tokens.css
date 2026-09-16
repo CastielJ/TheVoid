@@ -28,10 +28,17 @@
   --color-success: #16a34a;
   --color-warning: #d97706;
 
+  /* Post-launch refinement pass: 6-level priority scale (@void/shared's
+     taskPriorityValues) — lowest..highest is a calm blue->amber->red ramp,
+     first_priority is deliberately distinct (violet) rather than "redder
+     than red", since it's a different kind of signal (a pinned top-of-stack
+     marker) rather than one more step of urgency. */
+  --color-priority-lowest: #a1a1aa;
   --color-priority-low: #6b7280;
   --color-priority-medium: #2563eb;
   --color-priority-high: #d97706;
-  --color-priority-urgent: #dc2626;
+  --color-priority-highest: #dc2626;
+  --color-priority-first_priority: #7c3aed;
 
   --color-status-todo: #71717a;
   --color-status-in_progress: #2563eb;
@@ -50,7 +57,8 @@
   --canvas-selection-border: #6366f1;
 
   --font-sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -66,4 +74,15 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.16);
+
+  /* Post-launch refinement pass: shared motion system. One durations/easing
+     scale, reused everywhere (panels, dropdowns, hover/focus, auth-page
+     transitions) instead of ad hoc per-component values — see global.css
+     for the prefers-reduced-motion override that zeroes all of these in one
+     place, rather than each component checking it individually. */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0.1, 1);
 }

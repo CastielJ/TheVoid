@@ -5,7 +5,7 @@ import {
   verifyAuthToken,
   consumeAuthToken,
 } from "../../src/domains/auth/tokens.js";
-import { createUser } from "../../src/domains/auth/users.js";
+import { createUser } from "../helpers/testUser.js";
 import { resetAuthTables } from "../helpers/db.js";
 
 /**

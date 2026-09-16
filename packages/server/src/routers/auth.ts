@@ -2,12 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { publicProcedure, protectedProcedure, router } from "../trpc.js";
 import { checkRateLimit } from "../domains/auth/rateLimit.js";
-import {
-  hashPassword,
-  verifyPassword,
-  validatePasswordLength,
-  isPasswordBreached,
-} from "../domains/auth/password.js";
+import { hashPassword, verifyPassword, checkPasswordPolicy } from "../domains/auth/password.js";
 import { issueAuthToken, verifyAuthToken, consumeAuthToken } from "../domains/auth/tokens.js";
 import {
   createSession,
@@ -23,6 +18,10 @@ import {
   createUser,
   markEmailVerified,
   updatePassword,
+  updateVisibleName,
+  isUsernameTaken,
+  generateUsernameFromEmail,
+  USERNAME_PATTERN,
 } from "../domains/auth/users.js";
 import {
   generateTotpSecret,
@@ -45,32 +44,70 @@ function clientIp(req: { ip: string }): string {
   return req.ip;
 }
 
+/**
+ * Shared by signup/resetPassword/change-password: runs the unconditional
+ * length + breach check and translates a policy failure into the right
+ * TRPCError. "breached" gets its own distinguishable code (PRECONDITION_FAILED)
+ * so the frontend can offer an explicit "Use anyway" override rather than a
+ * plain rejection — there is no existing string-matching convention in this
+ * codebase to follow, so a structural error code is used instead of message text.
+ */
+async function enforcePasswordPolicyOrThrow(
+  plaintext: string,
+  acknowledgeBreach: boolean,
+): Promise<void> {
+  const result = await checkPasswordPolicy(plaintext, acknowledgeBreach);
+  if (result.ok) return;
+  if (result.reason === "too_short") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
+  }
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message:
+      "This password has appeared in a known data breach. You can proceed anyway if you understand the risk.",
+  });
+}
+
 export const authRouter = router({
   // --- Signup / email verification ---------------------------------------
   signup: publicProcedure
-    .input(z.object({ email: emailSchema, password: z.string() }))
+    .input(
+      z.object({
+        email: emailSchema,
+        username: z.string().regex(USERNAME_PATTERN, "3-20 lowercase letters, numbers, or _"),
+        visibleName: z.string().trim().min(1).max(80),
+        password: z.string(),
+        acknowledgeBreach: z.boolean().optional().default(false),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       checkRateLimit(`signup:${clientIp(ctx.req)}`, { windowMs: 60 * 60 * 1000, max: 10 });
 
-      const lengthCheck = validatePasswordLength(input.password);
-      if (!lengthCheck.valid) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: lengthCheck.message });
-      }
-      if (await isPasswordBreached(input.password)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This password has appeared in a known data breach. Please choose another.",
-        });
-      }
+      await enforcePasswordPolicyOrThrow(input.password, input.acknowledgeBreach);
 
+      // Existing-email check must run BEFORE the username-uniqueness check,
+      // not after — otherwise a resubmission for an already-registered
+      // email (e.g. the same client retrying) leaks account existence via
+      // a distinguishable "username taken" error instead of the intended
+      // silent { ok: true }, since a deterministic client-side username
+      // suggestion would collide with itself on a second attempt.
       const existing = await findUserByEmail(input.email);
       if (existing) {
-        // Do not reveal whether the account exists (standard practice).
         return { ok: true as const };
       }
 
+      const username = input.username.toLowerCase();
+      if (await isUsernameTaken(username)) {
+        throw new TRPCError({ code: "CONFLICT", message: "That username is already taken." });
+      }
+
       const passwordHash = await hashPassword(input.password);
-      const user = await createUser(input.email, passwordHash);
+      const user = await createUser({
+        email: input.email,
+        username,
+        visibleName: input.visibleName,
+        passwordHash,
+      });
       const rawToken = await issueAuthToken(user.id, "email_verification");
       await emailSender.send("email_verification", user.email, { token: rawToken });
 
@@ -91,6 +128,27 @@ export const authRouter = router({
       await markEmailVerified(result.userId);
       return { ok: true as const };
     }),
+
+  // Authenticated + actor-keyed rate limit (mirrors routers/invitation.ts's
+  // `invite:${ctx.session.user.id}` convention for authenticated endpoints).
+  // issueAuthToken already revokes any prior outstanding token of the same
+  // purpose (domains/auth/tokens.ts, C4) before issuing a new one, so no
+  // separate revoke step is needed here.
+  resendVerificationEmail: protectedProcedure.mutation(async ({ ctx }) => {
+    checkRateLimit(`resend-verify:${ctx.session.user.id}`, {
+      windowMs: 60 * 60 * 1000,
+      max: 5,
+    });
+
+    const user = await findUserById(ctx.session.user.id);
+    if (!user || user.emailVerifiedAt) {
+      return { ok: true as const };
+    }
+
+    const rawToken = await issueAuthToken(user.id, "email_verification");
+    await emailSender.send("email_verification", user.email, { token: rawToken });
+    return { ok: true as const };
+  }),
 
   // --- Password login (with optional 2FA challenge) -----------------------
   login: publicProcedure
@@ -168,9 +226,17 @@ export const authRouter = router({
       let user = await findUserByEmail(input.email);
       // Magic link can also be how a brand-new user signs up (D19: both
       // methods authenticate the same underlying account, no separate
-      // account types) — create the account on first request.
+      // account types) — create the account on first request. Username/
+      // visibleName aren't collected by this flow, so a valid, unique
+      // username is derived from the email and the local-part is used as a
+      // starting visibleName; both are editable later from Account settings.
       if (!user) {
-        user = await createUser(input.email);
+        const generatedUsername = await generateUsernameFromEmail(input.email);
+        user = await createUser({
+          email: input.email,
+          username: generatedUsername,
+          visibleName: input.email.split("@")[0] || "User",
+        });
       }
 
       const rawToken = await issueAuthToken(user.id, "magic_link");
@@ -219,7 +285,13 @@ export const authRouter = router({
     }),
 
   resetPassword: publicProcedure
-    .input(z.object({ token: z.string(), newPassword: z.string() }))
+    .input(
+      z.object({
+        token: z.string(),
+        newPassword: z.string(),
+        acknowledgeBreach: z.boolean().optional().default(false),
+      }),
+    )
     .mutation(async ({ input }) => {
       const result = await verifyAuthToken(input.token, "password_reset");
       if (!result.valid) {
@@ -229,16 +301,7 @@ export const authRouter = router({
         });
       }
 
-      const lengthCheck = validatePasswordLength(input.newPassword);
-      if (!lengthCheck.valid) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: lengthCheck.message });
-      }
-      if (await isPasswordBreached(input.newPassword)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This password has appeared in a known data breach. Please choose another.",
-        });
-      }
+      await enforcePasswordPolicyOrThrow(input.newPassword, input.acknowledgeBreach);
 
       await consumeAuthToken(result.tokenId);
       const passwordHash = await hashPassword(input.newPassword);
@@ -313,7 +376,20 @@ export const authRouter = router({
     return {
       id: ctx.session.user.id,
       email: ctx.session.user.email,
+      username: ctx.session.user.username,
+      visibleName: ctx.session.user.visibleName,
+      emailVerified: Boolean(ctx.session.user.emailVerifiedAt),
       totpEnabled: Boolean(ctx.session.user.totpSecret),
     };
   }),
+
+  // visibleName only — username is set at registration and not editable in
+  // this pass (no requirement to make it editable; changing it would also
+  // break existing @username mentions pointing at it).
+  updateVisibleName: protectedProcedure
+    .input(z.object({ visibleName: z.string().trim().min(1).max(80) }))
+    .mutation(async ({ ctx, input }) => {
+      await updateVisibleName(ctx.session.user.id, input.visibleName);
+      return { ok: true as const };
+    }),
 });

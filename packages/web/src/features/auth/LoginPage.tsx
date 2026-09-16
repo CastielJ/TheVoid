@@ -14,7 +14,7 @@ export function LoginPage() {
   // back (e.g. AcceptInvitePage) — falls back to the default landing page.
   const redirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo ?? "/orgs";
   const { refetch } = useSession();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState((location.state as { email?: string } | null)?.email ?? "");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
@@ -55,8 +55,11 @@ export function LoginPage() {
   if (challengeToken) {
     return (
       <AuthLayout>
-        <Card style={{ width: 360 }}>
-          <h1 style={{ fontSize: 20, marginTop: 0 }}>Two-factor code</h1>
+        <Card className="void-panel-in" style={{ width: "min(360px, 100%)" }}>
+          <h1 style={{ fontSize: 20, marginTop: 0, marginBottom: 4 }}>Two-factor code</h1>
+          <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 0 }}>
+            Enter the 6-digit code from your authenticator app.
+          </p>
           <form onSubmit={handleVerify}>
             <FormField label="6-digit code" htmlFor="code">
               <Input
@@ -73,10 +76,27 @@ export function LoginPage() {
                 {error}
               </p>
             )}
-            <Button type="submit" disabled={verify2FA.isPending} style={{ width: "100%" }}>
+            <Button type="submit" loading={verify2FA.isPending} style={{ width: "100%" }}>
               Verify
             </Button>
           </form>
+          <button
+            type="button"
+            onClick={() => {
+              setChallengeToken(null);
+              setError(null);
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--color-text-muted)",
+              fontSize: 13,
+              padding: 0,
+              cursor: "pointer",
+            }}
+          >
+            ← Back to login
+          </button>
         </Card>
       </AuthLayout>
     );
@@ -84,14 +104,18 @@ export function LoginPage() {
 
   return (
     <AuthLayout>
-      <Card style={{ width: 360 }}>
-        <h1 style={{ fontSize: 20, marginTop: 0 }}>Log in</h1>
+      <Card style={{ width: "min(360px, 100%)" }}>
+        <h1 style={{ fontSize: 20, marginTop: 0, marginBottom: 4 }}>Log in</h1>
+        <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 0 }}>
+          Welcome back.
+        </p>
         <form onSubmit={handleLogin}>
           <FormField label="Email" htmlFor="email">
             <Input
               id="email"
               type="email"
               required
+              autoFocus
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
@@ -110,7 +134,7 @@ export function LoginPage() {
               {error}
             </p>
           )}
-          <Button type="submit" disabled={login.isPending} style={{ width: "100%" }}>
+          <Button type="submit" loading={login.isPending} style={{ width: "100%" }}>
             Log in
           </Button>
         </form>

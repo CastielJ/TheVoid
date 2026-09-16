@@ -1678,6 +1678,225 @@ this engagement against a comparably fresh, migrated database) — judged
 sufficient given the migration step, which was the actual broken
 mechanism, is now proven.
 
+## Post-Launch Refinement Pass (2026-09-16)
+
+A large, single-pass refinement requested after the MVP was live on Railway
+and used for real: a polished visual/motion system for auth and canvas
+surfaces, spatial double-click-to-create replacing toolbar buttons, proper
+Tags and a 6-level Priority scale, human-identity display everywhere
+(username + visible name, not raw email/UUID), a searchable assignee
+picker, a less punitive breached-password UX, and a real (previously
+dormant) email-verification flow. Phone verification was requested, then
+explicitly withdrawn during clarification — out of scope entirely, and
+confirmed to require no code removal since the shipped MVP had none.
+Planned via three research/validation agent passes against the live code
+and this document before any implementation began; approved by the user
+with two clarifications, both recorded below.
+
+**Priority: 4-level enum replaced by a 6-level scale, single source of
+truth.** `low|medium|high|urgent` → `lowest|low|medium|high|highest|
+first_priority`, ordered exactly in that sequence (`first_priority` is a
+deliberate top "drop everything" tier _above_ `highest`, not a synonym for
+it — encoded as `packages/shared/src/index.ts`'s `taskPriorityRank`). The
+value list, its display labels, and its rank now live in one place
+(`@void/shared`'s `taskPriorityValues`/`taskPriorityLabels`/
+`taskPriorityRank`), imported by `schema.ts`, `routers/task.ts`, and every
+frontend priority display — previously three independently hardcoded
+copies that could (and eventually would) drift. `tasks.priority` is a
+plain `text` column with no DB-level enum/CHECK constraint (Drizzle's
+`{ enum: [...] }` is TypeScript-only metadata) — the value-list change
+therefore produced no schema diff; the only real migration was a
+hand-authored data remap (`UPDATE tasks SET priority='highest' WHERE
+priority='urgent'`), since `low`/`medium`/`high` were already valid
+strings in the new set.
+
+**Tags: new Organization-scoped entity, not Void-scoped.** Reusable across
+every Void in an Organization rather than duplicated per-Void. New `tags`
+table (`organizationId`, `name`, unique per-org case-insensitively via
+`lower(name)`) plus `task_tags`/`group_tags` join tables, replacing the old
+free-text `tasks.tags` text[] column (migrated: existing free-text values
+deduped case-insensitively into `tags` rows, attributed to each Task's own
+`createdBy`, then the column dropped — three separate migrations, kept as
+deliberate checkpoints rather than combined). **Authorization: no new
+capability.** Tag creation/assignment is gated by the same Editor+
+capability already used for the Task/Group being tagged
+(`canEditVoidForTask`/`canEditVoidForGroup`) — sound because `canEditVoid`
+already structurally requires active Organization membership
+(`getVoidRole` resolves the Void's Organization and calls
+`getActiveMembership` before returning any role), so Editor-on-a-Void
+already implies valid standing in that Void's Organization. **Explicit
+invariant, confirmed with the user during review and enforced in code:** a
+Tag's existence never grants access to anything — it is a plain
+Organization-scoped data row, not an access-control mechanism (Non-
+negotiable #4 is unaffected). The tRPC procedures resolve `organizationId`
+server-side from `taskId`/`groupId` only, never accept it as direct client
+input (mirrors the existing child-resource-capability-wrapper rule), and
+`assignTagsToTask`/`assignTagsToGroup` enforce app-layer that a Tag's
+`organizationId` matches the Task/Group's own — a Task in Organization A
+can never be tagged with a Tag belonging to Organization B. Tags are
+accepted as plain name strings (`tagNames: string[]`, full-replace
+semantics matching the old column) via `task.update`/`group.update`,
+find-or-created inline server-side — no separate `tag.create` endpoint;
+`tag.list` is the only Tag procedure exposed at all, and it's read-only.
+`duplicateTask` (ID5) now copies a Task's `task_tags` associations onto the
+copy (same Tag ids — Tags are shared vocabulary, duplication must never
+create new Tag rows), not the removed text[] column.
+
+**Identity: `username` + `visibleName` added to `User`, `email` no longer
+the only identity signal.** `username` is a stable, globally-unique,
+lowercase-normalized (matching the existing `email` convention — a plain
+`unique()` index on the already-normalized value, not a functional index)
+mention/search/lookup identifier, set at registration and not editable in
+this pass. `visibleName` is the human-readable display name, freely
+editable via `auth.updateVisibleName`. Existing rows (the handful of test
+accounts from Railway deploy verification — no real users predate this)
+were backfilled from their email local-part, normalized to the username
+pattern (`[a-z0-9_]{3,20}`) and de-duplicated with a numeric suffix
+_before_ the follow-up migration added the `NOT NULL`/`unique` constraints
+— a naive one-line "use the local part" would have produced values
+violating the very constraint being added. A brand-new account created via
+magic-link (which collects no username/visibleName at all) gets one
+auto-generated the same way (`generateUsernameFromEmail`), editable
+afterward from Account settings. **New shared identity-resolution utility**
+(`getUsersDisplayInfo`, `domains/auth/users.ts`) replaces what used to be
+ad hoc, per-caller email lookups scattered across `TaskDetailPanel`,
+`MembersPanel`, and comment/notification display — including a real
+pre-existing gap where a User with only a direct (non-Team) Void grant had
+no email available to display at all and rendered as a truncated UUID.
+**New `void.listEligibleMembers`** (authorization-scoped exactly like
+`listAccessibleVoids` — never returns a user without current access to the
+specific Void queried) unifies direct + Team-derived access into one
+deduped, server-side-searchable list, powering the new searchable assignee
+picker ("Search members…" → "Alex Johnson (@alex)") that replaces every
+raw-ID/email assignment dropdown.
+
+**Comment `@mentions` switched from `@`+email to `@`+username.** The old
+D39 syntax predated `username` existing at all (`User` had no handle of
+any kind). `parseMentionedEmails` → `parseMentionedUsernames`, resolved via
+`findUserByUsername`; same non-disclosure semantics as before (a mention
+only notifies a User who has an account _and_ currently has access to the
+Task's Void).
+
+**Breached-password UX: warn-and-override, not hard rejection.** `signup`/
+`resetPassword` gained an `acknowledgeBreach` flag. The length floor
+(12 chars) remains never overridable — only the HIBP breach check has an
+override path, and it is a real server-validated override, not a
+client-asserted one: `checkPasswordPolicy` (`domains/auth/password.ts`)
+calls `isPasswordBreached()` **unconditionally on every submission**
+regardless of the flag's value; the flag only decides what happens with an
+already-computed result, and never short-circuits the check itself — an
+explicit, tested invariant (`test/integration/auth.test.ts`: the mocked
+HIBP call is asserted to fire exactly once per submission, including the
+acknowledged one). A breach-without-acknowledgement is signaled via a
+distinct TRPCError code (`PRECONDITION_FAILED`, vs. `BAD_REQUEST` for the
+un-overridable length violation) rather than message-string matching —
+there was no existing precedent in this codebase for the frontend
+distinguishing tRPC error types (`LoginPage`/`SignupPage` previously just
+rendered `err.message` verbatim), so a structural code was used instead of
+inventing a fragile convention. The frontend shows the breach explicitly
+(never silently rejects) with an "Use anyway" button that resubmits with
+the flag set.
+
+**Email verification: frontend built for an already-existing but dormant
+backend, confirmed non-blocking by design — this supersedes D19's
+"required verification" wording.** The `email_verification` AuthToken
+flow and `verifyEmail` procedure existed since Phase 1 but had zero
+frontend consumer and were never actually enforced anywhere — login has
+never read `emailVerifiedAt`, and `SignupPage` has always auto-logged-in
+immediately after signup regardless of verification status. This pass adds
+what was missing (a real `VerifyEmailPage`, an `Account`-page status
+badge + persistent non-blocking indicator, and a rate-limited
+`resendVerificationEmail` procedure reusing `issueAuthToken`'s existing
+"revoke prior pending token of the same purpose" behavior) without
+changing that non-blocking behavior — per explicit user instruction during
+review ("don't require a new email verification code every login" /
+"unverified accounts remain usable rather than being blocked by a login
+gate"). **A future reader of this document should treat email verification
+as intentionally non-blocking-by-design, not merely unimplemented** — D19's
+original "required" language described an intent that was never actually
+built that way, and this pass makes that the confirmed, permanent
+behavior rather than reopening it.
+
+**Phone verification: explicitly out of scope, confirmed no-op.** Raised
+during the initial request, then withdrawn by the user before any design
+or implementation work started. Confirmed via code search that the
+shipped MVP has zero phone/SMS-related code anywhere (auth is email/
+password, magic-link, and TOTP only) — there was nothing to remove.
+
+**Canvas: toolbar "+ Task"/"+ Group" buttons replaced with double-click-
+anywhere-to-create.** The old buttons created objects at a fixed offset
+from the camera's top-left corner, never at any position the user actually
+indicated. A double-click on empty canvas background (guarded to fire only
+when the event target is the background itself, not a bubbled event from a
+TaskCard/GroupBox — both now `stopPropagation()` their own double-clicks)
+opens a screen-positioned creation panel (captured once at the moment of
+the click, like a context menu — deliberately not re-projected as the
+camera pans/zooms while it's open) offering Task or Group, then an inline
+form for the chosen type. On submission, the object's `x`/`y` are set to
+the exact world coordinate of the original double-click. **If that point
+falls inside an existing Group's rectangle, `groupId` is computed once, at
+creation time only** — consistent with D38's "Group membership is always
+explicit FK, never geometric, never continuously re-derived." **New
+`GroupDetailPanel`** — Groups previously had no edit UI of any kind beyond
+create/drag/resize (no rename, no way to view/set tags); it mirrors
+`TaskDetailPanel`'s structure (page-local open-state in `CanvasPage`, same
+panel-entrance motion) and reuses the rename support `group.update` already
+had at the API level.
+
+**Motion system: plain CSS, no new library.** Two reusable
+animations — `void-panel-in` (right-edge slide-in, for `TaskDetailPanel`/
+`GroupDetailPanel`) and `void-pop-in` (scale+fade, for the creation panel,
+tag/assignee picker dropdowns, and `NotificationBell`'s dropdown) — plus
+shared duration/easing tokens (`--motion-fast/base/slow`,
+`--ease-standard/--ease-emphasized`) and a single global
+`prefers-reduced-motion` override (`global.css`) that neutralizes every
+transition/animation in the app at once, rather than each component
+checking the media query individually. Deliberately not framer-motion or
+any animation library — matches the project's existing stated philosophy
+("No component library — plain CSS custom properties," `tokens.css`) and
+its only prior precedent (one CSS transition on `Button`). Canvas pan/zoom
+physics were not touched — "fluid" motion is scoped to UI-layer
+transitions (panels, hover/selection states, dropdowns); the camera math
+itself was already performance-validated in Phase 8 and re-litigating it
+was out of scope here.
+
+**Visual design: auth/UI-chrome stays light, canvas stays dark — not
+converted into a system dark-mode toggle.** Void's existing design system
+(Phase 6 Kickoff Notes) deliberately uses two fixed palettes (light UI
+chrome, permanently-dark canvas workspace) rather than a light/dark toggle
+tied to OS preference. This pass's "light and dark theme consistency"
+requirement is interpreted, and implemented, within that existing model —
+refining each palette's typography/spacing/motion coherently (a real Inter
+webfont replacing the system-font stack, IBM Plex Mono for
+code/credentials, a subtle dot-grid + radial-gradient auth background
+echoing the canvas's own visual language) — not as a new app-wide
+dark-mode architectural decision, which would contradict an established
+decision rather than refine it.
+
+**Verification:** all 152 server tests passing (10 new: 4 tag-domain
+tests covering org-scoped dedup and cross-org non-sharing, 1
+`listEligibleMembers` authorization-scoping test, 5 auth tests covering
+username uniqueness, the breached-password unconditional-check invariant,
+and `resendVerificationEmail`'s token-supersession/no-op-once-verified
+behavior), full workspace `typecheck`/`lint`/`format:check` clean, the
+Playwright critical-path E2E test updated for the new signup fields and
+double-click creation flow and passing, and a manual pass through a real
+running instance (signup including a genuine HIBP-positive breach warning
+against the live API, the creation panel positioned exactly at a
+double-click point, the tag/assignee pickers, the Account page's
+verification status) at both desktop (1440px) and tablet (820px) widths.
+
+**A real bug found and fixed during this pass, not present before it:**
+signup's username-uniqueness check initially ran _before_ the
+existing-email short-circuit, which meant a resubmission for an
+already-registered email (whose deterministically-suggested username would
+collide with itself) leaked account existence via a distinguishable
+"username taken" `CONFLICT` error instead of the intended silent
+`{ ok: true }`. Caught by the existing `notification.test.ts` mention test
+(which calls `signupAndLogin` twice for the same address) failing after
+the identity fields were added — fixed by reordering the two checks so the
+existing-email check always runs first.
+
 ## Approved assumptions (not separately interviewed, confirmed by user at documentation handoff)
 
 - **A1.** A Team Lead who creates a Void associated with their own Team becomes

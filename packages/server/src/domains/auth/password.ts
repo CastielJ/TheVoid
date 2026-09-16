@@ -56,3 +56,37 @@ export async function isPasswordBreached(plaintext: string): Promise<boolean> {
     return false;
   }
 }
+
+export type PasswordPolicyResult =
+  | { ok: true }
+  | { ok: false; reason: "too_short"; message: string }
+  | { ok: false; reason: "breached" };
+
+/**
+ * Post-launch refinement pass: single entry point for both password rules,
+ * used by every procedure that accepts a new plaintext password (signup,
+ * resetPassword, change-password). The length floor is never overridable.
+ * The breach check runs UNCONDITIONALLY regardless of `acknowledgeBreach` —
+ * the flag only decides what to do with an already-computed result; it must
+ * never short-circuit the HIBP call itself, or a client could effectively
+ * assert "trust me, it's fine" without the server ever having verified it.
+ * Returns a result rather than throwing (this module has no tRPC
+ * dependency, matching domains/auth/tokens.ts's `{valid, reason}` pattern)
+ * — the router translates this into the appropriate TRPCError.
+ */
+export async function checkPasswordPolicy(
+  plaintext: string,
+  acknowledgeBreach: boolean,
+): Promise<PasswordPolicyResult> {
+  const lengthCheck = validatePasswordLength(plaintext);
+  if (!lengthCheck.valid) {
+    return { ok: false, reason: "too_short", message: lengthCheck.message! };
+  }
+
+  const breached = await isPasswordBreached(plaintext);
+  if (breached && !acknowledgeBreach) {
+    return { ok: false, reason: "breached" };
+  }
+
+  return { ok: true };
+}

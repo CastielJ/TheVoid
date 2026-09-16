@@ -1,7 +1,8 @@
-import { eq, and, isNull, or, exists, inArray } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, or, exists, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { voids, voidAccessGrants, teams, teamMemberships, type Void } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/auditLog.js";
+import { getUsersDisplayInfo, type UserDisplayInfo } from "../auth/users.js";
 
 export type CreateVoidResult =
   { ok: true; void: Void } | { ok: false; reason: "team_not_in_organization" };
@@ -154,4 +155,52 @@ export async function listAccessibleVoids(userId: string, organizationId: string
         ),
       ),
     );
+}
+
+/**
+ * Post-launch refinement pass — powers the assignee search picker. Unifies
+ * direct VoidAccessGrant users and Team-derived access into one deduped,
+ * human-readable-identity list, fixing the previous gap where a direct
+ * grant with no Team membership had no email/display source at all (it
+ * rendered as a truncated UUID client-side). Authorization-scoped exactly
+ * like listAccessibleVoids: never returns a user without current access to
+ * this specific Void.
+ */
+export async function listEligibleMembersForVoid(
+  voidId: string,
+  query?: string,
+): Promise<UserDisplayInfo[]> {
+  const direct = await db
+    .select({ userId: voidAccessGrants.userId })
+    .from(voidAccessGrants)
+    .where(and(eq(voidAccessGrants.voidId, voidId), isNotNull(voidAccessGrants.userId)));
+
+  const teamDerived = await db
+    .select({ userId: teamMemberships.userId })
+    .from(voidAccessGrants)
+    .innerJoin(teamMemberships, eq(teamMemberships.teamId, voidAccessGrants.teamId))
+    .where(eq(voidAccessGrants.voidId, voidId));
+
+  const userIds = [
+    ...new Set(
+      [...direct.map((d) => d.userId), ...teamDerived.map((t) => t.userId)].filter(
+        (id): id is string => id !== null,
+      ),
+    ),
+  ];
+  if (userIds.length === 0) return [];
+
+  const displayInfoMap = await getUsersDisplayInfo(userIds);
+  let results = [...displayInfoMap.values()];
+
+  const trimmedQuery = query?.trim().toLowerCase();
+  if (trimmedQuery) {
+    results = results.filter(
+      (r) =>
+        r.username.toLowerCase().includes(trimmedQuery) ||
+        r.visibleName.toLowerCase().includes(trimmedQuery),
+    );
+  }
+
+  return results.sort((a, b) => a.visibleName.localeCompare(b.visibleName));
 }

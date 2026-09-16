@@ -30,13 +30,18 @@ export function MembersPanel({ organizationId }: { organizationId: string }) {
           style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
         >
           <div>
-            <div>{m.email}</div>
-            <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{m.role}</div>
+            <div>
+              {m.visibleName}{" "}
+              <span style={{ color: "var(--color-text-muted)" }}>@{m.username}</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+              {m.email} · {m.role}
+            </div>
           </div>
           {m.role !== "owner" && (
             <div style={{ display: "flex", gap: 8 }}>
               <select
-                aria-label={`Change role for ${m.email}`}
+                aria-label={`Change role for ${m.visibleName}`}
                 value={m.role}
                 onChange={(e) =>
                   updateRole.mutate({

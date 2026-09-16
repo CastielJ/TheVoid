@@ -62,7 +62,11 @@ export function AppShell({
           <Link to="/account" style={{ fontSize: 13 }}>
             Account
           </Link>
-          <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>{user?.email}</span>
+          {user && (
+            <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
+              {user.visibleName} <span style={{ opacity: 0.7 }}>@{user.username}</span>
+            </span>
+          )}
           <Button variant="ghost" onClick={handleLogout}>
             Log out
           </Button>

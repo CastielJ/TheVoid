@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, requireCapability, router } from "../trpc.js";
-import { canAccessVoid, canEditVoid, canEditVoidForGroup } from "../authorization/capabilities.js";
+import {
+  canAccessVoid,
+  canEditVoid,
+  canAccessVoidForGroup,
+  canEditVoidForGroup,
+} from "../authorization/capabilities.js";
 import {
   createGroup,
   findGroupById,
@@ -9,9 +14,11 @@ import {
   updateGroup,
   deleteGroup,
 } from "../domains/group/groups.js";
+import { assignTagsToGroup, listTagsForGroup } from "../domains/tag/tags.js";
 import { publishVoidEvent } from "../realtime/broadcast.js";
 
 const groupIdInput = z.object({ groupId: z.string().uuid() });
+const tagNamesInput = z.array(z.string().trim().min(1).max(40)).max(20);
 
 export const groupRouter = router({
   // Editor or Manager (D13). voidId is trustworthy client input here — the
@@ -26,11 +33,16 @@ export const groupRouter = router({
         y: z.number(),
         width: z.number().positive(),
         height: z.number().positive(),
+        tagNames: tagNamesInput.optional(),
       }),
     )
     .use(requireCapability(canEditVoid, (input: { voidId: string }) => input.voidId))
-    .mutation(async ({ input }) => {
-      const group = await createGroup(input);
+    .mutation(async ({ ctx, input }) => {
+      const { tagNames, ...groupInput } = input;
+      const group = await createGroup(groupInput);
+      if (tagNames && tagNames.length > 0) {
+        await assignTagsToGroup(group.id, tagNames, ctx.session.user.id);
+      }
       publishVoidEvent(input.voidId, "group.created", group);
       return group;
     }),
@@ -46,13 +58,17 @@ export const groupRouter = router({
         y: z.number().optional(),
         width: z.number().positive().optional(),
         height: z.number().positive().optional(),
+        tagNames: tagNamesInput.optional(),
       }),
     )
     .use(requireCapability(canEditVoidForGroup, (input: { groupId: string }) => input.groupId))
-    .mutation(async ({ input }) => {
-      const { groupId, ...changes } = input;
+    .mutation(async ({ ctx, input }) => {
+      const { groupId, tagNames, ...changes } = input;
       const group = await updateGroup(groupId, changes);
       if (!group) throw new TRPCError({ code: "NOT_FOUND" });
+      if (tagNames !== undefined) {
+        await assignTagsToGroup(groupId, tagNames, ctx.session.user.id);
+      }
       publishVoidEvent(group.voidId, "group.updated", group);
       return group;
     }),
@@ -73,5 +89,12 @@ export const groupRouter = router({
     .use(requireCapability(canAccessVoid, (input: { voidId: string }) => input.voidId))
     .query(async ({ input }) => {
       return listGroupsForVoid(input.voidId);
+    }),
+
+  listTags: protectedProcedure
+    .input(groupIdInput)
+    .use(requireCapability(canAccessVoidForGroup, (input: { groupId: string }) => input.groupId))
+    .query(async ({ input }) => {
+      return listTagsForGroup(input.groupId);
     }),
 });

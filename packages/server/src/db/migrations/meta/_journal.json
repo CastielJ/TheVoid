@@ -43,6 +43,48 @@
       "when": 1789534425331,
       "tag": "0005_overjoyed_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789558938974,
+      "tag": "0006_concerned_mockingbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789558952460,
+      "tag": "0007_backfill_username_visible_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789559036843,
+      "tag": "0008_backfill_tags_from_task_array",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789559133554,
+      "tag": "0009_productive_titania",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789559140822,
+      "tag": "0010_remap_urgent_priority_to_highest",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789560224893,
+      "tag": "0011_cuddly_wolf_cub",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { eq, and } from "drizzle-orm";
 import { pool, db } from "../../src/db/client.js";
 import { memberships, voidAccessGrants } from "../../src/db/schema.js";
-import { createUser } from "../../src/domains/auth/users.js";
+import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
 import { createTeam } from "../../src/domains/team/teams.js";
 import { addTeamMember } from "../../src/domains/team/teamMemberships.js";

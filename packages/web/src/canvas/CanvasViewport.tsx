@@ -29,10 +29,18 @@ function isTypingTarget(el: Element | null): boolean {
 export function CanvasViewport({
   voidId,
   onOpenTask,
+  onOpenGroup,
+  onBackgroundDoubleClick,
   focusTarget,
 }: {
   voidId: string;
   onOpenTask: (taskId: string) => void;
+  onOpenGroup: (groupId: string) => void;
+  /** World + screen coordinates of a double-click on empty canvas background. */
+  onBackgroundDoubleClick: (
+    world: { x: number; y: number },
+    screen: { x: number; y: number },
+  ) => void;
   /** Jump-to-object navigation (D43: search, My Tasks) — world coordinates to center the camera on once, when the viewport is ready. */
   focusTarget?: { x: number; y: number } | null;
 }) {
@@ -382,6 +390,22 @@ export function CanvasViewport({
   }, []);
 
   const handleOpenTask = useCallback((taskId: string) => onOpenTask(taskId), [onOpenTask]);
+  const handleOpenGroup = useCallback((groupId: string) => onOpenGroup(groupId), [onOpenGroup]);
+
+  function handleBackgroundDoubleClick(e: React.MouseEvent) {
+    // Only the background itself, never a bubbled double-click from a
+    // TaskCard/GroupBox (both stopPropagation their own onDoubleClick) or
+    // any other child element.
+    if (e.target !== e.currentTarget) return;
+    const rect = containerRef.current!.getBoundingClientRect();
+    const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const world = screenToWorld(camera, screenPoint.x, screenPoint.y);
+    // Container-relative, not raw window coordinates — the creation panel
+    // renders position:absolute inside this same container (CanvasPage), so
+    // its `left`/`top` must be relative to that container's origin, not the
+    // browser window's.
+    onBackgroundDoubleClick(world, screenPoint);
+  }
 
   return (
     <div
@@ -391,6 +415,7 @@ export function CanvasViewport({
       onPointerDown={handleBackgroundPointerDown}
       onPointerMove={handleBackgroundPointerMove}
       onPointerUp={handleBackgroundPointerUp}
+      onDoubleClick={handleBackgroundDoubleClick}
       onWheel={handleWheel}
       style={{
         position: "relative",
@@ -417,7 +442,7 @@ export function CanvasViewport({
         {[...groups.values()]
           .filter((g) => visibleGroupIds.has(g.id))
           .map((g) => (
-            <GroupBox key={g.id} group={g} zoom={camera.zoom} />
+            <GroupBox key={g.id} group={g} zoom={camera.zoom} onOpen={handleOpenGroup} />
           ))}
         {[...tasks.values()]
           .filter((t) => visibleTaskIds.has(t.id))
