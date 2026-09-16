@@ -20,7 +20,8 @@
     "test:unit": "pnpm --recursive test:unit",
     "test:integration": "pnpm --recursive test:integration",
     "db:migrate": "pnpm --filter @void/server db:migrate",
-    "db:generate": "pnpm --filter @void/server db:generate"
+    "db:generate": "pnpm --filter @void/server db:generate",
+    "start": "pnpm build && pnpm db:migrate && node packages/server/dist/index.js"
   },
   "devDependencies": {
     "eslint": "^9.15.0",
