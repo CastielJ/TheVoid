@@ -1,0 +1,618 @@
+<title>Launching Void</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --surface-2: #f3f3f6;
+    --border: #e2e2e8;
+    --text: #18181b;
+    --text-muted: #68686f;
+    --text-faint: #9a9aa2;
+    --accent: #4f46e5;
+    --accent-soft: #eef0fe;
+    --ok: #15803d;
+    --ok-soft: #eafaf0;
+    --warn: #b45309;
+    --warn-soft: #fef6e8;
+    --code-bg: #18181f;
+    --code-text: #e7e7ec;
+    --code-border: #2c2c36;
+    --shadow: 0 1px 2px rgba(24, 24, 27, 0.04), 0 8px 24px -12px rgba(24, 24, 27, 0.12);
+    --font-display: "IBM Plex Sans", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0b0f;
+      --surface: #15151b;
+      --surface-2: #1b1b22;
+      --border: #27272f;
+      --text: #e8e8ec;
+      --text-muted: #9d9da8;
+      --text-faint: #6d6d78;
+      --accent: #8b85f5;
+      --accent-soft: rgba(139, 133, 245, 0.13);
+      --ok: #4ade80;
+      --ok-soft: rgba(74, 222, 128, 0.1);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.1);
+      --code-bg: #0d0d12;
+      --code-text: #e7e7ec;
+      --code-border: #26262f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b0f;
+    --surface: #15151b;
+    --surface-2: #1b1b22;
+    --border: #27272f;
+    --text: #e8e8ec;
+    --text-muted: #9d9da8;
+    --text-faint: #6d6d78;
+    --accent: #8b85f5;
+    --accent-soft: rgba(139, 133, 245, 0.13);
+    --ok: #4ade80;
+    --ok-soft: rgba(74, 222, 128, 0.1);
+    --warn: #fbbf24;
+    --warn-soft: rgba(251, 191, 36, 0.1);
+    --code-bg: #0d0d12;
+    --code-text: #e7e7ec;
+    --code-border: #26262f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    padding-inline: 20px;
+    padding-block: 48px 96px;
+    line-height: 1.55;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  .page {
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 6vw, 40px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  .lede {
+    color: var(--text-muted);
+    font-size: 16.5px;
+    max-width: 56ch;
+    margin: 0 0 28px;
+  }
+
+  .progress {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    box-shadow: var(--shadow);
+    margin-bottom: 40px;
+  }
+  .progress-track {
+    flex: 1;
+    height: 8px;
+    background: var(--surface-2);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+    width: 0%;
+    transition: width 0.35s ease;
+  }
+  .progress-label {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .phase {
+    border-top: 1px solid var(--border);
+    padding-block: 32px;
+  }
+  .phase:first-of-type {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .phase-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 6px;
+  }
+  .phase-num {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-faint);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .phase-title {
+    font-family: var(--font-display);
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .tags {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .tag.you {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .tag.me {
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+
+  .phase-intro {
+    color: var(--text-muted);
+    font-size: 15px;
+    margin: 10px 0 20px;
+    max-width: 58ch;
+  }
+
+  .checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .item {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    gap: 12px;
+    padding: 10px 10px;
+    border-radius: 8px;
+  }
+  .item:hover {
+    background: var(--surface-2);
+  }
+  .item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .item label {
+    cursor: pointer;
+  }
+  .item-text {
+    font-size: 15px;
+  }
+  .item.checked .item-text {
+    color: var(--text-faint);
+    text-decoration: line-through;
+    text-decoration-color: var(--border);
+  }
+  .item-note {
+    color: var(--text-muted);
+    font-size: 13.5px;
+    margin-top: 4px;
+  }
+
+  code.inline {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.5px 5px;
+  }
+
+  pre {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    background: var(--code-bg);
+    color: var(--code-text);
+    border: 1px solid var(--code-border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 10px 0 4px;
+  }
+  pre .c {
+    color: #8a8a95;
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    text-underline-offset: 2px;
+  }
+
+  .callout {
+    display: flex;
+    gap: 10px;
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13.5px;
+    color: var(--text);
+    margin: 14px 0 4px;
+  }
+  .callout .dot {
+    color: var(--warn);
+    flex-shrink: 0;
+    font-weight: 700;
+  }
+  .callout strong {
+    font-weight: 600;
+  }
+
+  .done-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: var(--ok-soft);
+    border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
+    color: var(--ok);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 32px;
+  }
+  .done-banner.show {
+    display: flex;
+  }
+
+  footer {
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 12.5px;
+    font-family: var(--font-mono);
+  }
+</style>
+
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+/>
+
+<div class="page">
+  <p class="kicker">Void &middot; Post-MVP</p>
+  <h1>Launching Void</h1>
+  <p class="lede">
+    All eight build phases are done and tested. What's left is not code — it's decisions, accounts,
+    and a few things only you can click. This tracks all of it, in the order it actually needs to
+    happen.
+  </p>
+
+  <div class="progress">
+    <span class="progress-label" id="progress-label">0 / 0 done</span>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div class="done-banner" id="done-banner">✓ Everything on this list is checked off. Void is live.</div>
+
+  <!-- Phase 1 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">01</span>
+      <span class="phase-title">Put this in git</span>
+      <span class="tags"><span class="tag you">you</span></span>
+    </div>
+    <p class="phase-intro">
+      Nothing from Phases 0&ndash;8 has been committed anywhere. It all exists only on this machine.
+      This has to happen before anything else on this list can.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <input type="checkbox" id="c1" />
+        <label for="c1">
+          <div class="item-text">Create an empty repository on GitHub (or wherever you host git).</div>
+          <div class="item-note">Don't let it generate a README, .gitignore, or license &mdash; this project already has all three.</div>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c2" />
+        <label for="c2">
+          <div class="item-text">Review, then commit and push everything.</div>
+          <pre><span class="c"># from the repo root</span>
+git status                 <span class="c"># check nothing unexpected is about to be staged</span>
+git add -A
+git commit -m "Initial commit: Void MVP"
+git remote add origin https://github.com/&lt;you&gt;/&lt;repo&gt;.git
+git branch -M main
+git push -u origin main</pre>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c3" />
+        <label for="c3">
+          <div class="item-text">Confirm CI runs on the push and goes green.</div>
+          <div class="item-note"><code class="inline">.github/workflows/ci.yml</code> triggers automatically &mdash; typecheck, lint, format, the full test suite, and the E2E test.</div>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Phase 2 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">02</span>
+      <span class="phase-title">Choose a host</span>
+      <span class="tags"><span class="tag you">you decide</span><span class="tag me">then ask me</span></span>
+    </div>
+    <p class="phase-intro">
+      You need somewhere to run the Fastify server as a long-lived process, and a managed Postgres
+      database. This was deliberately left open during discovery &mdash; it's a real account/billing
+      commitment, not mine to lock in for you.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <label>
+          <div class="item-text">Pick one. Railway, Render, and Fly.io are the common choices at this scale &mdash; each bundles app hosting and a Postgres instance in one place.</div>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c4" />
+        <label for="c4">
+          <div class="item-text">Create the project on that host, and provision a Postgres database.</div>
+        </label>
+      </div>
+    </div>
+    <div class="callout">
+      <span class="dot">&#9679;</span>
+      <span>
+        <strong>Before you deploy:</strong> the server doesn't serve the built frontend yet &mdash; dev
+        mode relies on Vite's own dev server. Void's CSRF design (same-origin only, no CORS) means
+        production needs the API and the frontend served from one place. This is a small change I
+        haven't made yet. Ask me to add it, and to write the deploy config for whichever host you
+        pick, once you've chosen.
+      </span>
+    </div>
+  </section>
+
+  <!-- Phase 3 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">03</span>
+      <span class="phase-title">Pick an email provider</span>
+      <span class="tags"><span class="tag you">you decide</span><span class="tag me">then ask me</span></span>
+    </div>
+    <p class="phase-intro">
+      Every email Void sends &mdash; signup verification, magic links, password resets, invitations
+      &mdash; currently just logs to the server console. Nobody has received a real one yet.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <label><div class="item-text">Pick a provider &mdash; Resend, Postmark, and SES are the usual options for a project this size.</div></label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c5" />
+        <label for="c5">
+          <div class="item-text">Create an account, verify your sending domain, and get an API key.</div>
+          <div class="item-note">Each provider walks you through adding a few DNS records &mdash; that's the verification step.</div>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c6" />
+        <label for="c6">
+          <div class="item-text">Give me the provider and the API key as an environment variable.</div>
+          <div class="item-note">I'll write the concrete <code class="inline">EmailSender</code> implementation and swap it in for the console stub &mdash; everything else already only depends on that interface, so nothing else changes.</div>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Phase 4 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">04</span>
+      <span class="phase-title">Turn on error tracking</span>
+      <span class="tags"><span class="tag you">you decide</span><span class="tag me">then ask me</span></span>
+    </div>
+    <p class="phase-intro">
+      The server already warns on every startup that <code class="inline">SENTRY_DSN</code> isn't set.
+      The hook is built &mdash; it just has nowhere to send anything yet.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <input type="checkbox" id="c7" />
+        <label for="c7">
+          <div class="item-text">Create a project at Sentry (or your preferred equivalent) and copy the DSN.</div>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Phase 5 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">05</span>
+      <span class="phase-title">Set production environment variables</span>
+      <span class="tags"><span class="tag you">you</span></span>
+    </div>
+    <p class="phase-intro">
+      Everything gathered from Phases 2&ndash;4 gets set once, on the host, as real environment
+      variables &mdash; never in a committed file.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <input type="checkbox" id="c8" />
+        <label for="c8">
+          <div class="item-text">Generate a real session secret &mdash; not the dev placeholder in <code class="inline">.env</code>.</div>
+          <pre>openssl rand -base64 32</pre>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c9" />
+        <label for="c9">
+          <div class="item-text">Set the full list on your host:</div>
+          <pre>NODE_ENV=production
+DATABASE_URL=<span class="c">&lt;connection string your host gives you&gt;</span>
+SESSION_SECRET=<span class="c">&lt;the value you just generated&gt;</span>
+CLIENT_ORIGINS=<span class="c">https://your-production-domain.com</span>
+SENTRY_DSN=<span class="c">&lt;from Phase 4&gt;</span></pre>
+          <div class="item-note"><code class="inline">CLIENT_ORIGINS</code> matters more than it looks &mdash; the CSRF check rejects any request whose Origin header doesn't match it exactly.</div>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Phase 6 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">06</span>
+      <span class="phase-title">Deploy</span>
+      <span class="tags"><span class="tag you">you</span><span class="tag me">+ me</span></span>
+    </div>
+    <p class="phase-intro">
+      Mechanical once everything above is in place.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <input type="checkbox" id="c10" />
+        <label for="c10">
+          <div class="item-text">Connect the GitHub repo to your host.</div>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c11" />
+        <label for="c11">
+          <div class="item-text">Run the first deploy.</div>
+          <div class="item-note">Builds with <code class="inline">pnpm build</code>; the database needs <code class="inline">pnpm db:migrate</code> run once against production before anything can serve real traffic. Ask me to confirm this is wired into your specific host's deploy step &mdash; it varies by host.</div>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Phase 7 -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">07</span>
+      <span class="phase-title">Try it, for real</span>
+      <span class="tags"><span class="tag you">you</span></span>
+    </div>
+    <p class="phase-intro">
+      Everything up to here has been tested by me &mdash; unit, integration, E2E, a manual pass in a
+      real browser, an accessibility and performance audit. Nobody has used it as a genuine
+      first-time visitor yet. That's the one thing on this list that has to be you.
+    </p>
+    <div class="checklist">
+      <div class="item">
+        <input type="checkbox" id="c12" />
+        <label for="c12">
+          <div class="item-text">Sign up with a real address and confirm the verification email actually arrives.</div>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c13" />
+        <label for="c13">
+          <div class="item-text">Create an org, invite a second real address, accept it.</div>
+        </label>
+      </div>
+      <div class="item">
+        <input type="checkbox" id="c14" />
+        <label for="c14">
+          <div class="item-text">Trigger a deliberate error somewhere trivial and confirm it shows up in Sentry.</div>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <footer>Void &middot; everything above reflects the actual state of the codebase as of this build, not a template.</footer>
+</div>
+
+<script>
+  (function () {
+    var STORAGE_KEY = "void-launch-guide-checked";
+    var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type="checkbox"]'));
+
+    function loadState() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      } catch (e) {
+        return {};
+      }
+    }
+    function saveState(state) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {}
+    }
+
+    function updateProgress() {
+      var checked = boxes.filter(function (b) {
+        return b.checked;
+      }).length;
+      var fill = document.getElementById("progress-fill");
+      var label = document.getElementById("progress-label");
+      var pct = boxes.length ? Math.round((checked / boxes.length) * 100) : 0;
+      fill.style.width = pct + "%";
+      label.textContent = checked + " / " + boxes.length + " done";
+      document.getElementById("done-banner").classList.toggle("show", checked === boxes.length && boxes.length > 0);
+    }
+
+    var state = loadState();
+    boxes.forEach(function (box) {
+      if (state[box.id]) {
+        box.checked = true;
+        box.closest(".item").classList.add("checked");
+      }
+      box.addEventListener("change", function () {
+        state[box.id] = box.checked;
+        saveState(state);
+        box.closest(".item").classList.toggle("checked", box.checked);
+        updateProgress();
+      });
+    });
+    updateProgress();
+  })();
+</script>

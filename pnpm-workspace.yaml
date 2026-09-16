@@ -1,0 +1,20 @@
+packages:
+  - "packages/*"
+
+# pnpm's default "minimum release age" supply-chain policy blocks installing
+# any package version published within the last ~24h, to reduce the window
+# for a compromised-maintainer-account publish to be picked up automatically.
+# Set to 0 here deliberately: several transitive dependencies of
+# well-established packages (browserslist, fast-uri, brace-expansion,
+# @fastify/proxy-addr) had routine same-day releases during Phase 0 setup,
+# and waiting 24h+ isn't practical for local dev tooling. This is a
+# conscious development-velocity tradeoff, not a statement that supply-chain
+# risk doesn't matter — revisit before a real deployment (e.g. a real
+# minimum-release-age window, provenance/audit tooling) as part of Phase 8
+# hardening, not left as the permanent default.
+minimumReleaseAge: 0
+
+allowBuilds:
+  # esbuild's postinstall just downloads/places its platform-specific binary
+  # (used by vite/drizzle-kit/vitest, standard and widely trusted) — allowed.
+  esbuild: true

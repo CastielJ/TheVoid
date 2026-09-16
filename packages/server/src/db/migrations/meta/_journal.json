@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789494341615,
+      "tag": "0000_stormy_shriek",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789495481739,
+      "tag": "0001_melodic_dragon_lord",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789496305909,
+      "tag": "0002_dapper_skrulls",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789496926035,
+      "tag": "0003_colossal_typhoid_mary",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789531064696,
+      "tag": "0004_talented_shen",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789534425331,
+      "tag": "0005_overjoyed_brood",
+      "breakpoints": true
+    }
+  ]
+}

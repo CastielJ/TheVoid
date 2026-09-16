@@ -1,0 +1,32 @@
+{
+  "name": "void",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "pnpm@12.4.2",
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./packages/* dev",
+    "dev:server": "pnpm --filter @void/server dev",
+    "dev:web": "pnpm --filter @void/web dev",
+    "build": "pnpm --recursive build",
+    "typecheck": "pnpm --recursive typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm --recursive test",
+    "test:unit": "pnpm --recursive test:unit",
+    "test:integration": "pnpm --recursive test:integration",
+    "db:migrate": "pnpm --filter @void/server db:migrate",
+    "db:generate": "pnpm --filter @void/server db:generate"
+  },
+  "devDependencies": {
+    "eslint": "^9.15.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.15.0"
+  }
+}

@@ -1,0 +1,126 @@
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { trpc } from "../../trpc/client";
+import { Button } from "../../ui/Button";
+import { FormField, Input } from "../../ui/Input";
+import { Card } from "../../ui/Card";
+import { AuthLayout } from "./AuthLayout";
+import { useSession } from "../../app/session";
+
+export function LoginPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Set by pages that need the user to authenticate first and come straight
+  // back (e.g. AcceptInvitePage) — falls back to the default landing page.
+  const redirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo ?? "/orgs";
+  const { refetch } = useSession();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const login = trpc.auth.login.useMutation();
+  const verify2FA = trpc.auth.verify2FA.useMutation();
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      const result = await login.mutateAsync({ email, password });
+      if (result.requiresTwoFactor) {
+        setChallengeToken(result.challengeToken);
+        return;
+      }
+      refetch();
+      navigate(redirectTo);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Login failed.");
+    }
+  }
+
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (!challengeToken) return;
+    setError(null);
+    try {
+      await verify2FA.mutateAsync({ challengeToken, code });
+      refetch();
+      navigate(redirectTo);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Invalid code.");
+    }
+  }
+
+  if (challengeToken) {
+    return (
+      <AuthLayout>
+        <Card style={{ width: 360 }}>
+          <h1 style={{ fontSize: 20, marginTop: 0 }}>Two-factor code</h1>
+          <form onSubmit={handleVerify}>
+            <FormField label="6-digit code" htmlFor="code">
+              <Input
+                id="code"
+                inputMode="numeric"
+                autoFocus
+                required
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </FormField>
+            {error && (
+              <p role="alert" style={{ color: "var(--color-danger)", fontSize: 13, marginTop: -8 }}>
+                {error}
+              </p>
+            )}
+            <Button type="submit" disabled={verify2FA.isPending} style={{ width: "100%" }}>
+              Verify
+            </Button>
+          </form>
+        </Card>
+      </AuthLayout>
+    );
+  }
+
+  return (
+    <AuthLayout>
+      <Card style={{ width: 360 }}>
+        <h1 style={{ fontSize: 20, marginTop: 0 }}>Log in</h1>
+        <form onSubmit={handleLogin}>
+          <FormField label="Email" htmlFor="email">
+            <Input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </FormField>
+          <FormField label="Password" htmlFor="password">
+            <Input
+              id="password"
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </FormField>
+          {error && (
+            <p role="alert" style={{ color: "var(--color-danger)", fontSize: 13, marginTop: -8 }}>
+              {error}
+            </p>
+          )}
+          <Button type="submit" disabled={login.isPending} style={{ width: "100%" }}>
+            Log in
+          </Button>
+        </form>
+        <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 0 }}>
+          No account?{" "}
+          <Link to="/signup" state={{ redirectTo }}>
+            Sign up
+          </Link>
+        </p>
+      </Card>
+    </AuthLayout>
+  );
+}

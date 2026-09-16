@@ -1,0 +1,69 @@
+/**
+ * Minimal design-token set (docs/decisions.md "Phase 6 Kickoff Notes"):
+ * light UI chrome for auth/org/team screens, dark canvas workspace for the
+ * Void itself. No component library — plain CSS custom properties, per the
+ * "avoid framework complexity that doesn't materially help" principle
+ * (D47) applied here.
+ */
+:root {
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #e4e4e7;
+  /* WCAG 1.4.11 (non-text contrast, ≥3:1) — this token draws input/select
+     borders, a UI-component boundary essential to identifying the control,
+     unlike --color-border's purely decorative card dividers. */
+  --color-border-strong: #8b8b93;
+  --color-text: #18181b;
+  --color-text-muted: #71717a;
+  --color-text-faint: #a1a1aa;
+  /* Decorative/UI-boundary use only (focus rings, canvas selection) — as
+     text or as a button fill it falls just short of WCAG's 4.5:1 text
+     threshold, which --color-accent-hover exists to cover instead. */
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-text: #ffffff;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+
+  --color-priority-low: #6b7280;
+  --color-priority-medium: #2563eb;
+  --color-priority-high: #d97706;
+  --color-priority-urgent: #dc2626;
+
+  --color-status-todo: #71717a;
+  --color-status-in_progress: #2563eb;
+  --color-status-done: #16a34a;
+  --color-status-blocked: #dc2626;
+
+  /* Dark canvas workspace — independent palette, not a dark-mode toggle. */
+  --canvas-bg: #0b0b0f;
+  --canvas-grid-dot: #1e1e26;
+  --canvas-surface: #17171d;
+  --canvas-border: #2a2a33;
+  --canvas-border-strong: #3f3f4a;
+  --canvas-text: #e4e4e7;
+  --canvas-text-muted: #9999a3;
+  --canvas-selection: rgba(99, 102, 241, 0.18);
+  --canvas-selection-border: #6366f1;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
