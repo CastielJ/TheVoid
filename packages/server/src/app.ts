@@ -1,5 +1,8 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import fastifyCookie from "@fastify/cookie";
+import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import { env } from "./config/env.js";
@@ -62,6 +65,31 @@ export async function buildApp() {
   app.get("/health", async () => {
     await checkDatabaseConnection();
     return { status: "ok" };
+  });
+
+  // Serves the built web SPA (packages/web/dist) from the same origin as
+  // the API — the CSRF design (D9) assumes same-origin serving, and this
+  // is the only place that assumption is fulfilled in production. Path is
+  // resolved relative to this compiled file (dist/app.js), not process
+  // cwd, so it works regardless of where the server process is started
+  // from.
+  const webDistPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../packages/web/dist",
+  );
+  await app.register(fastifyStatic, {
+    root: webDistPath,
+    wildcard: false,
+  });
+  app.setNotFoundHandler((request, reply) => {
+    const isApiRoute =
+      request.url.startsWith("/trpc") ||
+      request.url.startsWith("/ws") ||
+      request.url.startsWith("/health");
+    if (request.method === "GET" && !isApiRoute) {
+      return reply.sendFile("index.html", webDistPath);
+    }
+    return reply.code(404).send({ error: "Not found" });
   });
 
   return app;

@@ -4,6 +4,6 @@
     "builder": "RAILPACK"
   },
   "deploy": {
-    "startCommand": "pnpm build && pnpm db:migrate && node packages/server/dist/index.js"
+    "startCommand": "pnpm build && pnpm db:migrate && node packages/server/dist/server.js"
   }
 }
