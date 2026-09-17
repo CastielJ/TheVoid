@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { eq, and, or, ne, exists } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { teams, type Team } from "../../db/schema.js";
+import { teams, teamMemberships, type Team, type TeamVisibility } from "../../db/schema.js";
 import { writeAuditLog } from "../audit/auditLog.js";
 
 export async function createTeam(
@@ -31,6 +31,38 @@ export async function listTeamsForOrganization(organizationId: string): Promise<
   return db.select().from(teams).where(eq(teams.organizationId, organizationId));
 }
 
+/**
+ * Second feature pass — the single choke point for "which Teams can this
+ * user see" (visibility: public/private/invisible). Every existing caller of
+ * listTeamsForOrganization is meant to switch to this one instead, so
+ * invisible-Team enforcement applies everywhere Teams are listed (the
+ * Void-creation Team picker included), not just the new left-panel tree —
+ * confirmed with the user as "everywhere, consistently."
+ */
+export async function listVisibleTeamsForOrganization(
+  organizationId: string,
+  userId: string,
+): Promise<Team[]> {
+  return db
+    .select({ team: teams })
+    .from(teams)
+    .where(
+      and(
+        eq(teams.organizationId, organizationId),
+        or(
+          ne(teams.visibility, "invisible"),
+          exists(
+            db
+              .select()
+              .from(teamMemberships)
+              .where(and(eq(teamMemberships.teamId, teams.id), eq(teamMemberships.userId, userId))),
+          ),
+        ),
+      ),
+    )
+    .then((rows) => rows.map((r) => r.team));
+}
+
 export async function updateTeamName(teamId: string, name: string, actorId: string): Promise<void> {
   const team = await findTeamById(teamId);
   if (!team) return;
@@ -43,6 +75,26 @@ export async function updateTeamName(teamId: string, name: string, actorId: stri
       targetType: "team",
       targetId: teamId,
       metadata: { name },
+    });
+  });
+}
+
+export async function updateTeamVisibility(
+  teamId: string,
+  visibility: TeamVisibility,
+  actorId: string,
+): Promise<void> {
+  const team = await findTeamById(teamId);
+  if (!team) return;
+  await db.transaction(async (tx) => {
+    await tx.update(teams).set({ visibility }).where(eq(teams.id, teamId));
+    await writeAuditLog(tx, {
+      organizationId: team.organizationId,
+      actorId,
+      eventType: "team.visibility_changed",
+      targetType: "team",
+      targetId: teamId,
+      metadata: { visibility },
     });
   });
 }

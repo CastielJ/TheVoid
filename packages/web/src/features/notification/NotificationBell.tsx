@@ -65,6 +65,25 @@ export function NotificationBell() {
       typeof payload.organizationId === "string"
     ) {
       navigate(`/orgs/${payload.organizationId}`);
+      return;
+    }
+    // Second feature pass: team join-request lifecycle. A Team Lead/Admin
+    // seeing a new request goes to that Team's management page (where the
+    // accept/deny UI lives); the requester seeing a decision just goes to
+    // the Organization dashboard.
+    if (
+      notification.type === "team_join_requested" &&
+      typeof payload.organizationId === "string" &&
+      typeof payload.teamId === "string"
+    ) {
+      navigate(`/orgs/${payload.organizationId}/teams/${payload.teamId}`);
+      return;
+    }
+    if (
+      (notification.type === "team_join_approved" || notification.type === "team_join_denied") &&
+      typeof payload.organizationId === "string"
+    ) {
+      navigate(`/orgs/${payload.organizationId}`);
     }
   }
 
@@ -186,6 +205,12 @@ function describeNotification(n: Notification): string {
       return "You were invited to an Organization.";
     case "role_changed":
       return "Your role changed.";
+    case "team_join_requested":
+      return "Someone requested to join a Team you manage.";
+    case "team_join_approved":
+      return "Your request to join a Team was accepted.";
+    case "team_join_denied":
+      return "Your request to join a Team was denied.";
     default:
       return "New notification.";
   }

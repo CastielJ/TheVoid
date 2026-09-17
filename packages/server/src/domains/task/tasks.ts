@@ -5,13 +5,17 @@ import {
   groups,
   checklistItems,
   taskAssignees,
+  comments,
+  taskTags,
   type Task,
   type TaskStatus,
   type TaskPriority,
+  type Group,
 } from "../../db/schema.js";
 import { recordTaskActivity } from "./taskActivity.js";
 import { listAccessibleVoids } from "../void/voids.js";
 import { copyTaskTags } from "../tag/tags.js";
+import { recomputeGroupBounds } from "../group/groups.js";
 
 export interface CreateTaskInput {
   voidId: string;
@@ -25,9 +29,16 @@ export interface CreateTaskInput {
 }
 
 export type CreateTaskResult =
-  { ok: true; task: Task } | { ok: false; reason: "group_not_in_void" };
+  { ok: true; task: Task; recomputedGroup?: Group } | { ok: false; reason: "group_not_in_void" };
 
-/** Enforces C3: Task.group_id, when set, must belong to the same Void as the Task. */
+/**
+ * Enforces C3: Task.group_id, when set, must belong to the same Void as the
+ * Task. `recomputedGroup` (when a Group's bounds actually changed as a side
+ * effect) is surfaced back to the router so it can broadcast a
+ * `group.updated` realtime event — otherwise no client, including the
+ * acting one, would ever learn the server auto-resized that Group, since
+ * this mutation's own response only carries the Task.
+ */
 export async function createTask(
   input: CreateTaskInput,
   creatorUserId: string,
@@ -39,22 +50,30 @@ export async function createTask(
     }
   }
 
-  const [task] = await db
-    .insert(tasks)
-    .values({
-      voidId: input.voidId,
-      groupId: input.groupId ?? null,
-      title: input.title,
-      description: input.description,
-      priority: input.priority,
-      dueDate: input.dueDate,
-      x: input.x,
-      y: input.y,
-      createdBy: creatorUserId,
-    })
-    .returning();
+  const { task, recomputedGroup } = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(tasks)
+      .values({
+        voidId: input.voidId,
+        groupId: input.groupId ?? null,
+        title: input.title,
+        description: input.description,
+        priority: input.priority,
+        dueDate: input.dueDate,
+        x: input.x,
+        y: input.y,
+        createdBy: creatorUserId,
+      })
+      .returning();
 
-  return { ok: true as const, task: task! };
+    const recomputedGroup = input.groupId
+      ? await recomputeGroupBounds(tx, input.groupId)
+      : undefined;
+
+    return { task: inserted!, recomputedGroup };
+  });
+
+  return { ok: true as const, task, recomputedGroup };
 }
 
 /** Raw lookup — does not filter `deleted_at` (mirrors domains/void/voids.js's findVoidById). */
@@ -68,6 +87,74 @@ export async function listTasksForVoid(voidId: string): Promise<Task[]> {
     .select()
     .from(tasks)
     .where(and(eq(tasks.voidId, voidId), isNull(tasks.deletedAt)));
+}
+
+export interface TaskSummary {
+  taskId: string;
+  checklistCount: number;
+  checklistDoneCount: number;
+  commentCount: number;
+  tagCount: number;
+  assigneeCount: number;
+}
+
+/**
+ * Second feature pass — the compact TaskCard's count-only badges (checklist/
+ * comments/tags/assignees) come from here, one batched call per Void load,
+ * instead of each visible card independently querying its own counts (which
+ * would multiply the request count with the number of simultaneously
+ * visible cards while zoomed out — the exact regression this function
+ * exists to avoid). Fixed query count (5) regardless of how many Tasks are
+ * in the Void.
+ */
+export async function listTaskSummariesForVoid(voidId: string): Promise<TaskSummary[]> {
+  const voidTasks = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.voidId, voidId), isNull(tasks.deletedAt)));
+  const taskIds = voidTasks.map((t) => t.id);
+  if (taskIds.length === 0) return [];
+
+  const [checklistRows, commentRows, tagRows, assigneeRows] = await Promise.all([
+    db
+      .select({
+        taskId: checklistItems.taskId,
+        total: sql<number>`count(*)`,
+        done: sql<number>`count(*) filter (where ${checklistItems.isComplete})`,
+      })
+      .from(checklistItems)
+      .where(inArray(checklistItems.taskId, taskIds))
+      .groupBy(checklistItems.taskId),
+    db
+      .select({ taskId: comments.taskId, total: sql<number>`count(*)` })
+      .from(comments)
+      .where(and(inArray(comments.taskId, taskIds), isNull(comments.deletedAt)))
+      .groupBy(comments.taskId),
+    db
+      .select({ taskId: taskTags.taskId, total: sql<number>`count(*)` })
+      .from(taskTags)
+      .where(inArray(taskTags.taskId, taskIds))
+      .groupBy(taskTags.taskId),
+    db
+      .select({ taskId: taskAssignees.taskId, total: sql<number>`count(*)` })
+      .from(taskAssignees)
+      .where(and(inArray(taskAssignees.taskId, taskIds), eq(taskAssignees.assigneeActive, true)))
+      .groupBy(taskAssignees.taskId),
+  ]);
+
+  const checklistMap = new Map(checklistRows.map((r) => [r.taskId, r]));
+  const commentMap = new Map(commentRows.map((r) => [r.taskId, Number(r.total)]));
+  const tagMap = new Map(tagRows.map((r) => [r.taskId, Number(r.total)]));
+  const assigneeMap = new Map(assigneeRows.map((r) => [r.taskId, Number(r.total)]));
+
+  return taskIds.map((taskId) => ({
+    taskId,
+    checklistCount: Number(checklistMap.get(taskId)?.total ?? 0),
+    checklistDoneCount: Number(checklistMap.get(taskId)?.done ?? 0),
+    commentCount: commentMap.get(taskId) ?? 0,
+    tagCount: tagMap.get(taskId) ?? 0,
+    assigneeCount: assigneeMap.get(taskId) ?? 0,
+  }));
 }
 
 /**
@@ -163,9 +250,14 @@ export interface MoveTaskInput {
 }
 
 export type MoveTaskResult =
-  { ok: true; task: Task } | { ok: false; reason: "not_found" | "group_not_in_void" };
+  | { ok: true; task: Task; recomputedGroups: Group[] }
+  | { ok: false; reason: "not_found" | "group_not_in_void" };
 
-/** Position and Group membership only. Enforces C3 the same way createTask does. */
+/**
+ * Position and Group membership only. Enforces C3 the same way createTask
+ * does. `recomputedGroups` — see createTask's docstring on why this is
+ * surfaced back to the router for a realtime broadcast.
+ */
 export async function moveTask(
   taskId: string,
   input: MoveTaskInput,
@@ -204,20 +296,40 @@ export async function moveTask(
       });
     }
 
-    return { ok: true as const, task: updated! };
+    // Group auto-sizing (second feature pass): a position change or a
+    // group-membership change both potentially affect a Group's bounding
+    // box. Recompute whichever Group(s) actually changed membership or
+    // could have grown/shrunk from this move — the former Group (if the
+    // Task left it) and the current Group (if it's in one, whether that's
+    // new or unchanged, since x/y may have moved within it).
+    const recomputedGroups: Group[] = [];
+    const finalGroupId = input.groupId !== undefined ? input.groupId : existing.groupId;
+    if (input.groupId !== undefined && existing.groupId && existing.groupId !== finalGroupId) {
+      recomputedGroups.push(await recomputeGroupBounds(tx, existing.groupId));
+    }
+    if (finalGroupId) {
+      recomputedGroups.push(await recomputeGroupBounds(tx, finalGroupId));
+    }
+
+    return { ok: true as const, task: updated!, recomputedGroups };
   });
 }
 
-export type DeleteTaskResult = { ok: true } | { ok: false; reason: "not_found" };
+export type DeleteTaskResult =
+  { ok: true; recomputedGroup?: Group } | { ok: false; reason: "not_found" };
 
 export async function deleteTask(taskId: string): Promise<DeleteTaskResult> {
   const existing = await findTaskById(taskId);
   if (!existing || existing.deletedAt) return { ok: false, reason: "not_found" as const };
-  await db.update(tasks).set({ deletedAt: new Date() }).where(eq(tasks.id, taskId));
-  return { ok: true as const };
+  const recomputedGroup = await db.transaction(async (tx) => {
+    await tx.update(tasks).set({ deletedAt: new Date() }).where(eq(tasks.id, taskId));
+    return existing.groupId ? await recomputeGroupBounds(tx, existing.groupId) : undefined;
+  });
+  return { ok: true as const, recomputedGroup };
 }
 
-export type DuplicateTaskResult = { ok: true; task: Task } | { ok: false; reason: "not_found" };
+export type DuplicateTaskResult =
+  { ok: true; task: Task; recomputedGroup?: Group } | { ok: false; reason: "not_found" };
 
 /**
  * ID5: new ID; copies title/description/priority/tags/group_id/checklist
@@ -231,7 +343,7 @@ export async function duplicateTask(taskId: string, actorId: string): Promise<Du
   const existing = await findTaskById(taskId);
   if (!existing || existing.deletedAt) return { ok: false, reason: "not_found" as const };
 
-  const newTask = await db.transaction(async (tx) => {
+  const { newTask, recomputedGroup } = await db.transaction(async (tx) => {
     const [inserted] = await tx
       .insert(tasks)
       .values({
@@ -259,10 +371,14 @@ export async function duplicateTask(taskId: string, actorId: string): Promise<Du
       );
     }
 
-    return inserted!;
+    const recomputedGroup = existing.groupId
+      ? await recomputeGroupBounds(tx, existing.groupId)
+      : undefined;
+
+    return { newTask: inserted!, recomputedGroup };
   });
 
   await copyTaskTags(taskId, newTask.id);
 
-  return { ok: true as const, task: newTask };
+  return { ok: true as const, task: newTask, recomputedGroup };
 }

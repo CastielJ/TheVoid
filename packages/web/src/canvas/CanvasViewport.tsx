@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../trpc/client";
 import { useCanvasStore, type SelectionEntry } from "./store";
 import {
@@ -8,12 +8,26 @@ import {
   worldLayerTransform,
   zoomAt,
 } from "./camera";
-import { buildSpatialIndex, queryVisible, TASK_FOOTPRINT } from "./spatialIndex";
+import {
+  buildSpatialIndex,
+  queryVisible,
+  TASK_FOOTPRINT_COMPACT,
+  TASK_FOOTPRINT_EXPANDED,
+} from "./spatialIndex";
 import { TaskCard } from "./TaskCard";
 import { GroupBox } from "./GroupBox";
 
 const WASD_SPEED_WORLD_PER_SEC = 700;
 const CAMERA_SAVE_DEBOUNCE_MS = 800;
+
+// Mirrors domains/group/groups.ts's server-side constants exactly — used
+// only to preview what the server WOULD compute if a dragged Task were
+// dropped into a given Group, never written anywhere itself.
+const GROUP_PREVIEW_TASK_WIDTH = 220;
+const GROUP_PREVIEW_TASK_HEIGHT = 96;
+const GROUP_PREVIEW_PADDING = 24;
+const GROUP_PREVIEW_MIN_WIDTH = 280;
+const GROUP_PREVIEW_MIN_HEIGHT = 160;
 
 function isTypingTarget(el: Element | null): boolean {
   if (!el) return false;
@@ -28,14 +42,10 @@ function isTypingTarget(el: Element | null): boolean {
 
 export function CanvasViewport({
   voidId,
-  onOpenTask,
-  onOpenGroup,
   onBackgroundDoubleClick,
   focusTarget,
 }: {
   voidId: string;
-  onOpenTask: (taskId: string) => void;
-  onOpenGroup: (groupId: string) => void;
   /** World + screen coordinates of a double-click on empty canvas background. */
   onBackgroundDoubleClick: (
     world: { x: number; y: number },
@@ -56,11 +66,20 @@ export function CanvasViewport({
   const removeTask = useCanvasStore((s) => s.removeTask);
   const removeGroup = useCanvasStore((s) => s.removeGroup);
   const applyTask = useCanvasStore((s) => s.applyTask);
+  const expandedTaskIds = useCanvasStore((s) => s.expandedTaskIds);
+  const draggingTaskId = useCanvasStore((s) => s.draggingTaskId);
 
   const deleteTask = trpc.task.delete.useMutation();
   const deleteGroup = trpc.group.delete.useMutation();
   const duplicateTask = trpc.task.duplicate.useMutation({ onSuccess: (t) => applyTask(t) });
   const saveCamera = trpc.void.saveCamera.useMutation();
+  // Second feature pass: one batched query per Void load for every visible
+  // compact card's count badges, instead of one query per card.
+  const summaries = trpc.task.listSummaries.useQuery({ voidId });
+  const summaryByTaskId = useMemo(
+    () => new Map((summaries.data ?? []).map((s) => [s.taskId, s])),
+    [summaries.data],
+  );
 
   // --- container sizing -----------------------------------------------------
   useEffect(() => {
@@ -108,12 +127,20 @@ export function CanvasViewport({
   }, [camera.x, camera.y, camera.zoom, voidId]);
 
   // --- virtualization ---------------------------------------------------------
+  // Second feature pass: footprint varies per-task by expand state (a
+  // compact card is much smaller than an expanded, inline-editing one) —
+  // looked up here rather than a single flat constant.
   const taskIndex = useMemo(
     () =>
       buildSpatialIndex(
-        [...tasks.values()].map((t) => ({ id: t.id, x: t.x, y: t.y, ...TASK_FOOTPRINT })),
+        [...tasks.values()].map((t) => ({
+          id: t.id,
+          x: t.x,
+          y: t.y,
+          ...(expandedTaskIds.has(t.id) ? TASK_FOOTPRINT_EXPANDED : TASK_FOOTPRINT_COMPACT),
+        })),
       ),
-    [tasks],
+    [tasks, expandedTaskIds],
   );
   const groupIndex = useMemo(
     () =>
@@ -266,11 +293,14 @@ export function CanvasViewport({
       };
       const entries: SelectionEntry[] = [];
       for (const t of tasks.values()) {
+        const footprint = expandedTaskIds.has(t.id)
+          ? TASK_FOOTPRINT_EXPANDED
+          : TASK_FOOTPRINT_COMPACT;
         if (
           t.x < rect.maxX &&
-          t.x + TASK_FOOTPRINT.width > rect.minX &&
+          t.x + footprint.width > rect.minX &&
           t.y < rect.maxY &&
-          t.y + TASK_FOOTPRINT.height > rect.minY
+          t.y + footprint.height > rect.minY
         ) {
           entries.push({ kind: "task", id: t.id });
         }
@@ -389,14 +419,52 @@ export function CanvasViewport({
     // Mutation-object identities are stable across renders, so deps are intentionally left empty.
   }, []);
 
-  const handleOpenTask = useCallback((taskId: string) => onOpenTask(taskId), [onOpenTask]);
-  const handleOpenGroup = useCallback((groupId: string) => onOpenGroup(groupId), [onOpenGroup]);
+  // Second feature pass — live "if dropped here, this Group would resize
+  // to..." preview while a Task drag is hovering a Group's rect. Recomputed
+  // on every render during a drag (tasks Map changes on every pointermove
+  // via setLocalPosition already), mirroring domains/group/groups.ts's
+  // server-side bbox math exactly so the preview matches what will actually
+  // be persisted once the drag ends.
+  const dragPreview = useMemo(() => {
+    if (!draggingTaskId) return null;
+    const draggingTask = tasks.get(draggingTaskId);
+    if (!draggingTask) return null;
+    for (const g of groups.values()) {
+      const withinX = draggingTask.x >= g.x && draggingTask.x <= g.x + g.width;
+      const withinY = draggingTask.y >= g.y && draggingTask.y <= g.y + g.height;
+      if (!withinX || !withinY) continue;
+
+      const positions = [...tasks.values()]
+        .filter((t) => t.groupId === g.id && t.id !== draggingTaskId)
+        .map((t) => ({ x: t.x, y: t.y }));
+      positions.push({ x: draggingTask.x, y: draggingTask.y });
+
+      const minX = Math.min(...positions.map((p) => p.x));
+      const minY = Math.min(...positions.map((p) => p.y));
+      const maxX = Math.max(...positions.map((p) => p.x + GROUP_PREVIEW_TASK_WIDTH));
+      const maxY = Math.max(...positions.map((p) => p.y + GROUP_PREVIEW_TASK_HEIGHT));
+      return {
+        groupId: g.id,
+        bounds: {
+          x: minX - GROUP_PREVIEW_PADDING,
+          y: minY - GROUP_PREVIEW_PADDING,
+          width: Math.max(GROUP_PREVIEW_MIN_WIDTH, maxX - minX + GROUP_PREVIEW_PADDING * 2),
+          height: Math.max(GROUP_PREVIEW_MIN_HEIGHT, maxY - minY + GROUP_PREVIEW_PADDING * 2),
+        },
+      };
+    }
+    return null;
+  }, [draggingTaskId, tasks, groups]);
 
   function handleBackgroundDoubleClick(e: React.MouseEvent) {
-    // Only the background itself, never a bubbled double-click from a
-    // TaskCard/GroupBox (both stopPropagation their own onDoubleClick) or
-    // any other child element.
-    if (e.target !== e.currentTarget) return;
+    // Second feature pass: GroupBox no longer consumes its own double-click
+    // (editing is inline, single-click-based now), so a double-click landing
+    // visually inside an existing Group's rect must still open the creation
+    // panel — otherwise "double-click inside a Group to create a Task in it"
+    // (CanvasCreationPanel's findEnclosingGroupId) would be unreachable
+    // wherever a Group happens to be drawn. Only an actual TaskCard blocks
+    // this (creating "on top of" an existing Task isn't useful).
+    if ((e.target as HTMLElement).closest('[data-testid="task-card"]')) return;
     const rect = containerRef.current!.getBoundingClientRect();
     const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const world = screenToWorld(camera, screenPoint.x, screenPoint.y);
@@ -442,12 +510,17 @@ export function CanvasViewport({
         {[...groups.values()]
           .filter((g) => visibleGroupIds.has(g.id))
           .map((g) => (
-            <GroupBox key={g.id} group={g} zoom={camera.zoom} onOpen={handleOpenGroup} />
+            <GroupBox
+              key={g.id}
+              group={g}
+              voidId={voidId}
+              previewBounds={dragPreview?.groupId === g.id ? dragPreview.bounds : undefined}
+            />
           ))}
         {[...tasks.values()]
           .filter((t) => visibleTaskIds.has(t.id))
           .map((t) => (
-            <TaskCard key={t.id} task={t} zoom={camera.zoom} onOpen={handleOpenTask} />
+            <TaskCard key={t.id} task={t} summary={summaryByTaskId.get(t.id)} />
           ))}
       </div>
 

@@ -158,20 +158,23 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   await expect(ownerPage.locator('[data-testid="task-card"]')).toBeVisible();
 
   // --- 8. assign the Task to the member via the searchable assignee picker -----
-  await ownerPage.dblclick('[data-testid="task-card"]');
-  await ownerPage.waitForSelector('[data-testid="task-detail-panel"]');
+  // Second feature pass: a single click (not double-click) expands a Task
+  // card inline — the old side panel is gone, editing happens directly on
+  // the card itself.
+  await ownerPage.locator('[data-testid="task-card"]').click();
+  await ownerPage.waitForSelector('[aria-label="Description"]');
   await ownerPage.getByLabel("Search members…").fill("Member E2E");
   await ownerPage.getByText(`Member E2E @${memberUsername}`).click();
   await expect(
-    ownerPage.locator('[data-testid="task-detail-panel"]').getByText("Member E2E"),
+    ownerPage.locator('[data-testid="task-card"]').getByText("Member E2E"),
   ).toBeVisible();
 
   // --- 9. authorized user (the member, via their Team's default grant) can access/edit it ---
   await memberPage.goto(voidUrl);
   await memberPage.waitForSelector('[data-testid="canvas-viewport"]');
   await expect(memberPage.locator('[data-testid="task-card"]')).toBeVisible();
-  await memberPage.dblclick('[data-testid="task-card"]');
-  await memberPage.waitForSelector('[data-testid="task-detail-panel"]');
+  await memberPage.locator('[data-testid="task-card"]').click();
+  await memberPage.waitForSelector('[aria-label="Description"]');
   await memberPage.getByLabel("Status").selectOption("in_progress");
   await expect(memberPage.getByLabel("Status")).toHaveValue("in_progress");
   // The edit is live for the Owner too (D32), confirming it actually persisted server-side.
@@ -180,4 +183,33 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   // --- 10. unauthorized user cannot access it -----------------------------------
   await strangerPage.goto(voidUrl);
   await expect(strangerPage.getByText("You do not have access to this Void.")).toBeVisible();
+
+  // --- 11. second feature pass: Team visibility + join-request flow -------------
+  // Make "Engineering" private, have the stranger (an Org member, but not on
+  // that Team) request to join, and the Owner accept it via TeamDetailPage.
+  const {
+    rows: [strangerUser],
+  } = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [strangerEmail]);
+  await db
+    .insert(memberships)
+    .values({ organizationId: orgId, userId: strangerUser!.id, role: "member" });
+
+  await ownerPage.goto(`/orgs/${orgId}`);
+  await ownerPage.click('a:has-text("Manage")');
+  await ownerPage.waitForURL("**/teams/*");
+  await ownerPage.getByLabel("Team visibility").selectOption("private");
+
+  // TeamDetailPage itself is gated to Team Lead/Org Admin (canManageTeam) —
+  // a plain member like the stranger can't open it directly. The
+  // join-request affordance instead lives in the new left-panel Teams/Voids
+  // tree, reachable from any page (here, the Org dashboard).
+  await strangerPage.goto(`/orgs/${orgId}`);
+  await strangerPage.getByLabel("Open panel").click();
+  await strangerPage.getByRole("button", { name: "Request to join" }).click();
+  await expect(strangerPage.getByText("Request pending")).toBeVisible();
+
+  await ownerPage.reload();
+  await expect(ownerPage.getByRole("heading", { name: "Pending join requests" })).toBeVisible();
+  await ownerPage.click('button:has-text("Accept")');
+  await expect(ownerPage.getByText("No pending requests.")).toBeVisible();
 });

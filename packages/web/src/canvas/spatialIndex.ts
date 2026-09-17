@@ -11,10 +11,14 @@ import type { Bounds } from "./camera";
  */
 export const BUCKET_SIZE = 512;
 
-// Fixed approximate footprint used only for bucket placement so a card
+// Fixed approximate footprints used only for bucket placement so a card
 // whose center is just outside the viewport but whose edge overlaps it
-// isn't culled — not the actual rendered size.
-export const TASK_FOOTPRINT = { width: 240, height: 110 };
+// isn't culled — not the actual rendered size. Second feature pass: two
+// footprints instead of one, since a Task's card now has a compact (default)
+// and an expanded (inline-editing) state with meaningfully different sizes —
+// looked up per-task by expand state at the CanvasViewport call site.
+export const TASK_FOOTPRINT_COMPACT = { width: 240, height: 110 };
+export const TASK_FOOTPRINT_EXPANDED = { width: 340, height: 460 };
 
 export interface SpatialObject {
   id: string;
@@ -31,8 +35,8 @@ function bucketKey(bx: number, by: number): string {
 export function buildSpatialIndex(objects: SpatialObject[]): Map<string, string[]> {
   const index = new Map<string, string[]>();
   for (const obj of objects) {
-    const width = obj.width ?? TASK_FOOTPRINT.width;
-    const height = obj.height ?? TASK_FOOTPRINT.height;
+    const width = obj.width ?? TASK_FOOTPRINT_COMPACT.width;
+    const height = obj.height ?? TASK_FOOTPRINT_COMPACT.height;
     const minBX = Math.floor(obj.x / BUCKET_SIZE);
     const maxBX = Math.floor((obj.x + width) / BUCKET_SIZE);
     const minBY = Math.floor(obj.y / BUCKET_SIZE);

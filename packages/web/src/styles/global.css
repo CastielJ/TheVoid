@@ -20,6 +20,23 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/**
+ * Second feature pass — theme-toggle transition. Scoped to large surfaces
+ * (page/canvas backgrounds, the header, panels) rather than a blanket `*`
+ * selector, which would risk janky flashes on every unrelated re-render.
+ * Already covered by the existing global prefers-reduced-motion override
+ * below — no separate media query needed here.
+ */
+body,
+#root,
+[data-testid="canvas-viewport"],
+.void-theme-surface {
+  transition:
+    background-color var(--motion-slow) var(--ease-emphasized),
+    border-color var(--motion-slow) var(--ease-emphasized),
+    color var(--motion-base) var(--ease-standard);
+}
+
 input,
 textarea,
 select,
@@ -86,6 +103,22 @@ a {
   animation: void-panel-in var(--motion-slow) var(--ease-emphasized);
 }
 
+/* Second feature pass — the left-side slide-in panel; mirrors void-panel-in
+   but translating from the opposite edge, same duration/easing tokens. */
+@keyframes void-panel-in-left {
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+.void-panel-in-left {
+  animation: void-panel-in-left var(--motion-slow) var(--ease-emphasized);
+}
+
 .void-pop-in {
   animation: void-pop-in var(--motion-base) var(--ease-standard);
   transform-origin: top right;
@@ -99,6 +132,24 @@ a {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Second feature pass — ThemeToggle's sun/moon swap: a quick rotate+fade of
+   the icon being replaced, reusing the existing token scale rather than a
+   new one. */
+@keyframes void-theme-icon-in {
+  from {
+    transform: rotate(-90deg) scale(0.5);
+    opacity: 0;
+  }
+  to {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+.void-theme-icon {
+  display: inline-flex;
+  animation: void-theme-icon-in var(--motion-base) var(--ease-emphasized);
 }
 
 .void-btn:hover:not(:disabled) {

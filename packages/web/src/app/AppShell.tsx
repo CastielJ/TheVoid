@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { trpc } from "../trpc/client";
 import { useSession } from "./session";
+import { useLeftPanel } from "./LeftPanelContext";
 import { Button } from "../ui/Button";
 import { SearchBar } from "../features/search/SearchBar";
 import { NotificationBell } from "../features/notification/NotificationBell";
@@ -15,6 +16,7 @@ export function AppShell({
 }) {
   const navigate = useNavigate();
   const { user, refetch } = useSession();
+  const { toggle } = useLeftPanel();
   const logout = trpc.auth.logout.useMutation();
 
   async function handleLogout() {
@@ -39,6 +41,20 @@ export function AppShell({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+          <button
+            onClick={toggle}
+            aria-label="Open panel"
+            className="void-icon-btn"
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--color-text-muted)",
+              fontSize: 16,
+              padding: 4,
+            }}
+          >
+            ☰
+          </button>
           <Link
             to="/orgs"
             style={{

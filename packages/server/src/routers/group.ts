@@ -24,6 +24,10 @@ export const groupRouter = router({
   // Editor or Manager (D13). voidId is trustworthy client input here — the
   // created Group's voidId literally *is* this value, no other entity to
   // cross-check it against.
+  // width/height are deliberately absent (second feature pass: Groups are
+  // auto-sized server-side via recomputeGroupBounds — createGroup itself
+  // initializes to GROUP_MIN_WIDTH/HEIGHT since a brand-new Group has no
+  // member Tasks yet).
   create: protectedProcedure
     .input(
       z.object({
@@ -31,8 +35,6 @@ export const groupRouter = router({
         name: z.string().min(1),
         x: z.number(),
         y: z.number(),
-        width: z.number().positive(),
-        height: z.number().positive(),
         tagNames: tagNamesInput.optional(),
       }),
     )
@@ -50,14 +52,13 @@ export const groupRouter = router({
   // groupId resolves its own Void server-side (canEditVoidForGroup) — never
   // trust a client-supplied voidId for authorization here (Group.void_id is
   // immutable and not part of this input at all).
+  // width/height dropped (second feature pass) — size is fully server-owned.
   update: protectedProcedure
     .input(
       groupIdInput.extend({
         name: z.string().min(1).optional(),
         x: z.number().optional(),
         y: z.number().optional(),
-        width: z.number().positive().optional(),
-        height: z.number().positive().optional(),
         tagNames: tagNamesInput.optional(),
       }),
     )

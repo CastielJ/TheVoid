@@ -1897,6 +1897,205 @@ collide with itself) leaked account existence via a distinguishable
 the identity fields were added — fixed by reordering the two checks so the
 existing-email check always runs first.
 
+## Second Feature Pass — Auto-Sizing Canvas, Inline Editing, Real Theming, Team Visibility (2026-09-16)
+
+A second, larger pass requested after further real use of the live product:
+auto-sizing Groups/Tasks instead of manual resize, fully inline card editing
+(removing the side-panel/double-click-to-open pattern entirely), a real
+sun/moon light/dark theme toggle for the whole app, a new left-side
+slide-in panel (theme toggle, recent Voids, a Teams/Voids navigation tree,
+a static keyboard-shortcuts reference), a three-tier Team visibility model
+(public/private/invisible) with a join-request workflow for private Teams,
+richer task cards with an inline done/undone toggle, and a
+performance-optimization pass to keep the ~1,500-task virtualization target
+(D59) intact given heavier cards. Planned via three Explore agents
+(canvas rendering/store/camera, Team/Void/Org schema, theming/motion/
+virtualization) and a Plan agent against the live code, then two rounds of
+clarifying questions with the user before implementation began.
+
+**P1. Theme toggle explicitly reverses the "two fixed palettes" decision
+above, at direct user request — not a reinterpretation.** The passage
+immediately above this section ("auth/UI-chrome stays light, canvas stays
+dark — not converted into a system dark-mode toggle") described the
+project's real, deliberate design at the time it was written. This pass
+replaces it: `tokens.css`'s flat `:root` color block became
+`[data-theme="light"]`/`[data-theme="dark"]` sibling blocks for **both**
+token groups — a genuine light `--canvas-*` palette and a genuine dark
+`--color-*` palette were authored from scratch (previously only one side of
+each existed). Preference is stored server-side (`users.theme_preference`,
+nullable = "system"), not localStorage-only, since Void already has
+cross-device sessions and a toggle that silently resets per-device would be
+a worse experience than what it replaces; a synchronous localStorage
+write-through mirror (read and applied before React mounts, in `main.tsx`)
+prevents a flash of the wrong theme, reconciled against the server's value
+once the session loads (server wins on conflict). A future reader should
+treat the light/dark toggle as the current, intended design — not a
+regression of the "two fixed palettes" reasoning, which was correct for
+its time but has now been superseded by direct instruction.
+
+**P2. Groups are now server-computed, auto-sized bounding boxes — the
+manual drag-resize handle is removed.** `domains/group/groups.ts`'s
+`recomputeGroupBounds(tx, groupId)` runs inside the same transaction as any
+Task create/move/delete/duplicate that could change a Group's membership or
+a member's position (plus Group creation, which just initializes to a
+`GROUP_MIN_WIDTH`/`GROUP_MIN_HEIGHT` minimum): it recomputes **both** size
+and position as a tight bbox over member Task positions plus fixed padding,
+so the box stays correctly anchored rather than only ever growing from a
+stale corner. An empty Group shrinks to the minimum and keeps its current
+x/y rather than vanishing or jumping to the origin. `group.update`'s input
+no longer accepts `width`/`height` at all — size is fully server-owned now.
+**A real gap found and fixed during implementation:** the first version of
+this silently broke realtime sync — `task.create`/`move`/`delete`/
+`duplicate`'s own tRPC response only ever carried the Task, so a Group
+auto-resizing as a side effect of one of those mutations was never
+communicated to any client, including the acting one. Fixed by threading
+the recomputed Group(s) back through each domain function's result type
+and broadcasting a `group.updated` realtime event from the router
+alongside the existing `task.*` event — the same WebSocket channel every
+client (including the actor) is already subscribed to for D32's live-sync
+guarantee.
+
+**P3. Live drag-over-Group "ghost preview" is client-only and ephemeral.**
+While dragging a Task, `CanvasViewport` derives a hypothetical bbox (current
+members + the dragged Task's live position) for whichever Group's rect the
+pointer is currently inside, using the exact same padding/minimum-size
+constants as the server (`domains/group/groups.ts`), and renders it as a
+translucent overlay via a new client-only `previewGroupBounds` store slot.
+Discarded on drop; the real server recompute (P2) is authoritative once the
+drag actually ends. Never persisted mid-drag.
+
+**P4. Task cards: compact (default) and expanded (click to toggle) states
+— not a full replacement of every card with an always-rendered detail
+view.** `TaskDetailPanel.tsx`/`GroupDetailPanel.tsx` (the old side panels)
+are deleted; their content is relocated directly onto the card. Compact
+keeps a small footprint (title, an inline done/undone checkbox, priority
+dot, status, due date, and count-only badges for non-empty checklist/
+comments/tags/assignees) so the default render path stays cheap at scale;
+expanded — toggled by a plain click, not a drag, not a double-click, since
+double-click-to-open no longer exists — inlines everything the old panel
+had (description, status/priority/due date, tags, assignees, checklist,
+comments, duplicate/delete), reusing the exact same `trpc.task.*` mutations
+already in use, relocated rather than reinvented. Full-content queries
+(checklist/comments/tags/assignees) only fire when a card is actually
+expanded (`enabled: isExpanded`); a new batched `task.listSummaries`
+procedure (5 fixed queries regardless of Task count — one lookup of the
+Void's Task ids, then one `GROUP BY` aggregate each for checklist/comments/
+tags/assignees) supplies every visible compact card's count badges in one
+request per Void load, instead of one query per card. Task card width is
+one of two fixed values (220 compact / 320 expanded); only height is
+intrinsic/content-driven — a continuously variable width would have
+meaningfully complicated the spatial index and Group bbox math for little
+benefit. `spatialIndex.ts`'s single `TASK_FOOTPRINT` constant became
+`TASK_FOOTPRINT_COMPACT`/`TASK_FOOTPRINT_EXPANDED`, looked up per-task by
+expand state.
+
+**P5. Done/undone toggle always sets status to `"todo"` for "undone"** —
+does not attempt to restore whatever status a Task had before it was
+marked done. Simplest correct behavior; not put to the user separately.
+
+**P6. Team visibility: three tiers, public/private/invisible.** New
+`teams.visibility` column, default `"public"` (preserves the pre-existing
+behavior — every Org member saw every Team). `domains/team/teams.ts`'s
+`listVisibleTeamsForOrganization` is the single choke point every existing
+caller of the old `listTeamsForOrganization` switched to, which is what
+makes invisible-Team enforcement apply **everywhere** Teams are listed
+(Void-creation's Team picker, the new left-panel tree, the Org dashboard)
+rather than only wherever it was directly implemented — confirmed with the
+user as "everywhere, consistently." A user's own membership additionally
+overrides the invisible filter (`listTeamIdsUserIsMemberOf`, batched per
+listing call). **Confirmed explicitly with the user: "public" only changes
+visibility, not how joining works** — there is still no self-service join
+for a public Team; adding someone always goes through the existing Team
+Lead/Org Admin `addMember` action, same as before this pass. (An earlier
+planning draft had proposed an optional self-join path for public Teams
+specifically — cut per this confirmation, never implemented.) Visibility
+can be set by Org Owner/Admin or that Team's own Team Lead — reuses
+`canManageTeam`'s existing rule exactly, no new capability function.
+
+**P7. Private-Team joining is a real, persisted join-request workflow, not
+an informational-only popup.** New `teamJoinRequests` table, modeled
+directly on the existing `invitations` domain's shape (id, teamId, userId,
+status, createdAt, decidedBy, decidedAt) rather than a new pattern. A
+partial unique index on `(teamId, userId) WHERE status = 'pending'`
+enforces at most one live request per Team+User at the database level — a
+race between two concurrent `requestJoin` calls is caught and translated,
+mirroring `findOrCreateTag`'s existing race-retry convention rather than
+inspecting a Postgres error code directly. No separate "ignored" status
+exists: an un-acted-on request just stays `pending` indefinitely, per the
+user's own "don't over-engineer" steer. Notifications reuse the existing
+`notification` domain with three new type literals
+(`team_join_requested`/`team_join_approved`/`team_join_denied`) rather than
+a separate mechanism — a request notifies the Team's Lead(s), or Org
+Owner/Admins if no Team Lead is set (reusing `canManageTeam`'s own
+resolution logic rather than re-deriving "who manages this Team");
+acceptance inserts the requester into `teamMemberships` and notifies them,
+denial just notifies them.
+
+**P8. Shared Voids across multiple Teams required no new schema** — a Void
+already having grants to multiple Teams simultaneously
+(`voidAccessGrants`, one row per Team) was already fully supported
+structurally; this pass only surfaces it in the new left-panel tree (a new
+`void.listMineWithTeamGrants` aggregate query, one batched call rather than
+N+1 per-Void lookups, returning each accessible Void alongside every
+Team id currently granted on it) with a "shared" badge where a Void renders
+under more than one Team.
+
+**P9. Left panel is reachable from every authenticated page, not just
+`AppShell`-wrapped ones.** `CanvasPage.tsx` has its own header (a full-bleed
+dark workspace, not the standard chrome layout) and doesn't use `AppShell`
+at all, so the panel's open/closed state lives in a new
+`LeftPanelContext`/`LeftPanelProvider` above both, rendered once at the App
+root — both `AppShell` and `CanvasPage` just render a toggle button calling
+the shared `useLeftPanel().toggle()`.
+
+**Performance re-validation, following the exact D59 precedent:** seeded
+1,500 Tasks directly at the DB layer (bypassing HTTP; 145ms), then drove a
+real browser. Results: hydration-to-first-render 574ms (vs. the original
+849ms baseline); mounted `task-card` node counts of 7 at rest, 12 after 2s
+of WASD panning, and 141 after a 15-tick zoom-out (vs. the original
+20/24/448 — lower here due to a different random seed distribution across
+world-space, not a regression; virtualization is clearly still doing its
+job with the new, slightly heavier compact-card markup); a new metric this
+pass introduces with no prior baseline — time to fully-rendered content
+after expanding one card inline — measured 117ms. `TaskCard`/`GroupBox`
+were also wrapped in `React.memo` and stopped taking `zoom` as a prop
+(previously forced a re-render of every visible card on every camera pan/
+zoom tick, since that value genuinely changes every frame; drag math now
+reads the current zoom fresh from the store inside the pointer handler
+instead) — a real latent inefficiency independent of this pass's other
+changes, worth fixing regardless since heavier expanded cards made it
+worse.
+
+**A real regression found and fixed during implementation, not present
+before it:** the first version of the double-click-to-create guard
+(`if (e.target !== e.currentTarget) return`) was written when
+`GroupBox`/`TaskCard` still consumed their own double-click to open a side
+panel; once that panel-opening behavior was removed, the same guard
+silently swallowed every double-click landing anywhere inside an existing
+Group's visible rectangle — breaking "double-click inside a Group to
+create a Task in it" (`CanvasCreationPanel`'s `findEnclosingGroupId`)
+wherever a Group happened to be drawn, since the click's `target` would
+resolve to the Group element rather than the background container. Caught
+by manual/Playwright smoke testing, not a written test. Fixed by checking
+specifically for a `task-card` ancestor instead (creating "on top of" an
+existing Task isn't useful; creating inside a Group's rect is the whole
+point).
+
+**Verification:** all 166 server tests passing (14 new: Team-visibility
+listing correctness across all three tiers, the join-request lifecycle
+including the duplicate-pending-rejected and Team-Lead/Admin-only-decide
+cases, and Group auto-resize bbox correctness across create/move/delete/
+duplicate plus the empty-Group minimum-size case), full workspace
+`typecheck`/`lint`/`format:check` clean, the Playwright critical-path E2E
+test updated for the click-to-expand flow (replacing double-click-to-open)
+and extended with a Team-visibility-set + join-request-accept sequence
+rather than a second E2E file, the empirical performance re-validation
+above, and a manual pass through a real running instance (double-click
+create inside/outside a Group, Group auto-resize and its live drag
+preview, card expand/collapse and the done-toggle, the left panel's theme
+toggle/recent-Voids/Teams-tree, and the full join-request flow) confirmed
+via Playwright-driven screenshots at desktop width.
+
 ## Approved assumptions (not separately interviewed, confirmed by user at documentation handoff)
 
 - **A1.** A Team Lead who creates a Void associated with their own Team becomes

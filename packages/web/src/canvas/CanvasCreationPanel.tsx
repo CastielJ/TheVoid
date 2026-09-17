@@ -240,14 +240,16 @@ function GroupCreateForm({
       onSubmit={(e) => {
         e.preventDefault();
         if (!name.trim()) return;
+        // Second feature pass: Groups are auto-sized server-side
+        // (recomputeGroupBounds) — width/height are no longer client-settable.
+        // A brand-new empty Group starts at GROUP_MIN_WIDTH/HEIGHT (280x160,
+        // domains/group/groups.ts); center the click point within that.
         create.mutate({
           voidId,
           name: name.trim(),
           tagNames: tagNames.length > 0 ? tagNames : undefined,
-          x: worldPosition.x - 160,
-          y: worldPosition.y - 110,
-          width: 320,
-          height: 220,
+          x: worldPosition.x - 140,
+          y: worldPosition.y - 80,
         });
       }}
       style={{ display: "flex", flexDirection: "column", gap: 10 }}

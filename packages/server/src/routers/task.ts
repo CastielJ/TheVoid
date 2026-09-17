@@ -18,6 +18,7 @@ import {
   createTask,
   findTaskById,
   listTasksForVoid,
+  listTaskSummariesForVoid,
   listMyTasks,
   updateTask,
   moveTask,
@@ -74,6 +75,13 @@ export const taskRouter = router({
         await assignTagsToTask(result.task.id, tagNames, ctx.session.user.id);
       }
       publishVoidEvent(input.voidId, "task.created", result.task);
+      // Second feature pass: a Group auto-resized as a side effect of this
+      // Task landing inside it — broadcast so every client (including the
+      // acting one, via its own realtime subscription) picks up the new
+      // bounds, since this mutation's own response only carries the Task.
+      if (result.recomputedGroup) {
+        publishVoidEvent(input.voidId, "group.updated", result.recomputedGroup);
+      }
       return result.task;
     }),
 
@@ -91,6 +99,16 @@ export const taskRouter = router({
     .use(requireCapability(canAccessVoid, (input: { voidId: string }) => input.voidId))
     .query(async ({ input }) => {
       return listTasksForVoid(input.voidId);
+    }),
+
+  // Second feature pass — powers TaskCard's compact-state count badges
+  // (checklist/comments/tags/assignees), one batched call per Void load
+  // instead of one query per visible card.
+  listSummaries: protectedProcedure
+    .input(z.object({ voidId: z.string().uuid() }))
+    .use(requireCapability(canAccessVoid, (input: { voidId: string }) => input.voidId))
+    .query(async ({ input }) => {
+      return listTaskSummariesForVoid(input.voidId);
     }),
 
   // D44 My Tasks — ungated beyond auth, same reasoning as void.list/
@@ -145,6 +163,9 @@ export const taskRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message });
       }
       publishVoidEvent(result.task.voidId, "task.moved", result.task);
+      for (const group of result.recomputedGroups) {
+        publishVoidEvent(result.task.voidId, "group.updated", group);
+      }
       return result.task;
     }),
 
@@ -157,6 +178,9 @@ export const taskRouter = router({
       const result = await deleteTask(input.taskId);
       if (!result.ok) throw new TRPCError({ code: "NOT_FOUND" });
       publishVoidEvent(existing.voidId, "task.deleted", { taskId: input.taskId });
+      if (result.recomputedGroup) {
+        publishVoidEvent(existing.voidId, "group.updated", result.recomputedGroup);
+      }
       return { ok: true as const };
     }),
 
@@ -168,6 +192,9 @@ export const taskRouter = router({
       const result = await duplicateTask(input.taskId, ctx.session.user.id);
       if (!result.ok) throw new TRPCError({ code: "NOT_FOUND" });
       publishVoidEvent(result.task.voidId, "task.created", result.task);
+      if (result.recomputedGroup) {
+        publishVoidEvent(result.task.voidId, "group.updated", result.recomputedGroup);
+      }
       return result.task;
     }),
 

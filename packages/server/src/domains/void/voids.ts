@@ -4,6 +4,43 @@ import { voids, voidAccessGrants, teams, teamMemberships, type Void } from "../.
 import { writeAuditLog } from "../audit/auditLog.js";
 import { getUsersDisplayInfo, type UserDisplayInfo } from "../auth/users.js";
 
+export interface VoidWithTeamGrants {
+  void: Void;
+  teamIds: string[];
+}
+
+/**
+ * Second feature pass — powers the new left-panel Teams/Voids tree. A Void
+ * granted to more than one Team (already fully supported structurally by
+ * voidAccessGrants — a Void can have grants to multiple Teams
+ * simultaneously) needs to render once per Team it's granted to, with a
+ * "shared" badge — this returns each accessible Void alongside every
+ * teamId that currently has a grant on it (not just Teams the caller
+ * belongs to), in one aggregate query rather than N+1 per-Void lookups.
+ */
+export async function listAccessibleVoidsWithTeamGrants(
+  userId: string,
+  organizationId: string,
+): Promise<VoidWithTeamGrants[]> {
+  const accessibleVoids = await listAccessibleVoids(userId, organizationId);
+  if (accessibleVoids.length === 0) return [];
+
+  const voidIds = accessibleVoids.map((v) => v.id);
+  const grantRows = await db
+    .select({ voidId: voidAccessGrants.voidId, teamId: voidAccessGrants.teamId })
+    .from(voidAccessGrants)
+    .where(and(inArray(voidAccessGrants.voidId, voidIds), isNotNull(voidAccessGrants.teamId)));
+
+  const teamIdsByVoidId = new Map<string, string[]>();
+  for (const row of grantRows) {
+    const list = teamIdsByVoidId.get(row.voidId) ?? [];
+    list.push(row.teamId!);
+    teamIdsByVoidId.set(row.voidId, list);
+  }
+
+  return accessibleVoids.map((v) => ({ void: v, teamIds: teamIdsByVoidId.get(v.id) ?? [] }));
+}
+
 export type CreateVoidResult =
   { ok: true; void: Void } | { ok: false; reason: "team_not_in_organization" };
 

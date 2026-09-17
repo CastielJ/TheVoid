@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { trpc } from "../trpc/client";
 import { useVoidRealtime } from "../realtime/useVoidRealtime";
 import { useCanvasStore } from "./store";
 import { CanvasViewport } from "./CanvasViewport";
-import { TaskDetailPanel } from "./TaskDetailPanel";
-import { GroupDetailPanel } from "./GroupDetailPanel";
 import { CanvasCreationPanel } from "./CanvasCreationPanel";
 import { Button } from "../ui/Button";
 import { FullPageStatus } from "../app/ProtectedRoute";
+import { useLeftPanel } from "../app/LeftPanelContext";
+import { recordVoidVisit } from "../app/recentVoids";
 
 const STATUS_LABEL: Record<string, string> = {
   connecting: "Connecting…",
@@ -27,11 +27,8 @@ export function CanvasPage() {
     { focusX?: number; focusY?: number; focusTaskId?: string } | null | undefined;
 
   const [terminalMessage, setTerminalMessage] = useState<string | null>(null);
-  const [openTaskId, setOpenTaskId] = useState<string | null>(focusState?.focusTaskId ?? null);
-  const [openGroupId, setOpenGroupId] = useState<string | null>(null);
-  // Page-local state, deliberately not in the Zustand canvas store — same
-  // reasoning as openTaskId/openGroupId above (the store holds shared/
-  // synced object state, not transient UI panel state).
+  // Page-local state, deliberately not in the Zustand canvas store — the
+  // store holds shared/synced object state, not transient per-visit UI state.
   const [creationRequest, setCreationRequest] = useState<{
     world: { x: number; y: number };
     screen: { x: number; y: number };
@@ -64,6 +61,27 @@ export function CanvasPage() {
   }, [savedCamera.data]);
 
   const voidInfo = trpc.void.get.useQuery({ voidId });
+  const { toggle } = useLeftPanel();
+
+  useEffect(() => {
+    if (voidInfo.data) {
+      recordVoidVisit({ voidId, organizationId: orgId, name: voidInfo.data.name });
+    }
+  }, [voidInfo.data, voidId, orgId]);
+
+  // Jump-to-object navigation (D43 search, D44 My Tasks) used to open the
+  // now-removed side panel; it now expands the Task inline instead, once
+  // it's actually present in the hydrated store (may not be on the very
+  // first render).
+  const tasks = useCanvasStore((s) => s.tasks);
+  const appliedFocusTaskId = useRef<string | null>(null);
+  useEffect(() => {
+    const focusTaskId = focusState?.focusTaskId;
+    if (!focusTaskId || appliedFocusTaskId.current === focusTaskId) return;
+    if (!tasks.has(focusTaskId)) return;
+    appliedFocusTaskId.current = focusTaskId;
+    useCanvasStore.getState().toggleExpanded(focusTaskId);
+  }, [focusState?.focusTaskId, tasks]);
 
   if (terminalMessage) {
     return (
@@ -103,6 +121,20 @@ export function CanvasPage() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button
+            onClick={toggle}
+            aria-label="Open panel"
+            className="void-icon-btn"
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--canvas-text-muted)",
+              fontSize: 16,
+              padding: 4,
+            }}
+          >
+            ☰
+          </button>
           <Button variant="ghost" onClick={() => navigate(`/orgs/${orgId}`)}>
             ←
           </Button>
@@ -121,19 +153,7 @@ export function CanvasPage() {
       <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>
         <CanvasViewport
           voidId={voidId}
-          onOpenTask={(taskId) => {
-            setOpenGroupId(null);
-            setCreationRequest(null);
-            setOpenTaskId(taskId);
-          }}
-          onOpenGroup={(groupId) => {
-            setOpenTaskId(null);
-            setCreationRequest(null);
-            setOpenGroupId(groupId);
-          }}
           onBackgroundDoubleClick={(world, screen) => {
-            setOpenTaskId(null);
-            setOpenGroupId(null);
             setCreationRequest({ world, screen });
           }}
           focusTarget={
@@ -142,10 +162,6 @@ export function CanvasPage() {
               : null
           }
         />
-        {openTaskId && <TaskDetailPanel taskId={openTaskId} onClose={() => setOpenTaskId(null)} />}
-        {openGroupId && (
-          <GroupDetailPanel groupId={openGroupId} onClose={() => setOpenGroupId(null)} />
-        )}
         {creationRequest && (
           <CanvasCreationPanel
             voidId={voidId}

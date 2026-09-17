@@ -1,11 +1,94 @@
 /**
- * Minimal design-token set (docs/decisions.md "Phase 6 Kickoff Notes"):
- * light UI chrome for auth/org/team screens, dark canvas workspace for the
- * Void itself. No component library — plain CSS custom properties, per the
- * "avoid framework complexity that doesn't materially help" principle
- * (D47) applied here.
+ * Design tokens (docs/decisions.md "Phase 6 Kickoff Notes", superseded by
+ * the second feature-pass addendum on real light/dark theming). No
+ * component library — plain CSS custom properties, per the "avoid framework
+ * complexity that doesn't materially help" principle (D47).
+ *
+ * Theme-invariant tokens (typography, spacing, radius, motion, and the
+ * priority/status accent colors, which are small saturated indicators that
+ * already read fine on either background) live in the bare `:root` block.
+ * Everything that actually differs between light and dark — both the UI
+ * chrome (`--color-*`) and the canvas workspace (`--canvas-*`) — lives in
+ * `[data-theme="light"]`/`[data-theme="dark"]` blocks below. `theme.ts`
+ * always resolves "system" to an explicit light/dark value and sets
+ * `data-theme` before React mounts, so the bare `:root` color values here
+ * only matter as a defensive fallback.
  */
 :root {
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Second feature pass: shared motion system. One durations/easing scale,
+     reused everywhere (panels, dropdowns, hover/focus, auth-page/theme
+     transitions) instead of ad hoc per-component values — see global.css
+     for the prefers-reduced-motion override that zeroes all of these in one
+     place, rather than each component checking it individually. */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0.1, 1);
+
+  /* 6-level priority scale (@void/shared's taskPriorityValues) — lowest..
+     highest is a calm blue->amber->red ramp, first_priority is deliberately
+     distinct (violet) rather than "redder than red", since it's a different
+     kind of signal (a pinned top-of-stack marker) than one more step of
+     urgency. Theme-invariant — small saturated indicators, not surfaces. */
+  --color-priority-lowest: #a1a1aa;
+  --color-priority-low: #6b7280;
+  --color-priority-medium: #2563eb;
+  --color-priority-high: #d97706;
+  --color-priority-highest: #dc2626;
+  --color-priority-first_priority: #7c3aed;
+
+  --color-status-todo: #71717a;
+  --color-status-in_progress: #2563eb;
+  --color-status-done: #16a34a;
+  --color-status-blocked: #dc2626;
+
+  /* Defensive fallback only (light) — see file header. */
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #e4e4e7;
+  --color-border-strong: #8b8b93;
+  --color-text: #18181b;
+  --color-text-muted: #71717a;
+  --color-text-faint: #a1a1aa;
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-text: #ffffff;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.16);
+  --canvas-bg: #0b0b0f;
+  --canvas-grid-dot: #1e1e26;
+  --canvas-surface: #17171d;
+  --canvas-border: #2a2a33;
+  --canvas-border-strong: #3f3f4a;
+  --canvas-text: #e4e4e7;
+  --canvas-text-muted: #9999a3;
+  --canvas-selection: rgba(99, 102, 241, 0.18);
+  --canvas-selection-border: #6366f1;
+}
+
+:root[data-theme="light"] {
   --color-bg: #fafafa;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
@@ -27,25 +110,50 @@
   --color-danger-hover: #b91c1c;
   --color-success: #16a34a;
   --color-warning: #d97706;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.16);
 
-  /* Post-launch refinement pass: 6-level priority scale (@void/shared's
-     taskPriorityValues) — lowest..highest is a calm blue->amber->red ramp,
-     first_priority is deliberately distinct (violet) rather than "redder
-     than red", since it's a different kind of signal (a pinned top-of-stack
-     marker) rather than one more step of urgency. */
-  --color-priority-lowest: #a1a1aa;
-  --color-priority-low: #6b7280;
-  --color-priority-medium: #2563eb;
-  --color-priority-high: #d97706;
-  --color-priority-highest: #dc2626;
-  --color-priority-first_priority: #7c3aed;
+  /* Second feature pass: a genuine light canvas palette (not just an inverted
+     dark one) — a soft warm-gray workspace, distinct from --color-bg so the
+     canvas still reads as its own "surface" rather than blending into the
+     chrome above it. */
+  --canvas-bg: #f2f2f5;
+  --canvas-grid-dot: #d9d9e0;
+  --canvas-surface: #ffffff;
+  --canvas-border: #e2e2e8;
+  --canvas-border-strong: #b6b6c1;
+  --canvas-text: #18181b;
+  --canvas-text-muted: #6b6b76;
+  --canvas-selection: rgba(99, 102, 241, 0.12);
+  --canvas-selection-border: #6366f1;
+}
 
-  --color-status-todo: #71717a;
-  --color-status-in_progress: #2563eb;
-  --color-status-done: #16a34a;
-  --color-status-blocked: #dc2626;
+:root[data-theme="dark"] {
+  /* Second feature pass: a genuine dark UI-chrome palette (auth/org/team/
+     account pages) — distinct from --canvas-bg so the two still read as
+     separate surfaces even when both are dark. */
+  --color-bg: #0e0e13;
+  --color-surface: #18181f;
+  --color-surface-raised: #1e1e27;
+  --color-border: #2b2b35;
+  --color-border-strong: #4c4c59;
+  --color-text: #e8e8ec;
+  --color-text-muted: #a0a0ac;
+  --color-text-faint: #6c6c78;
+  --color-accent: #818cf8;
+  --color-accent-hover: #6366f1;
+  --color-accent-text: #ffffff;
+  --color-danger: #f87171;
+  --color-danger-hover: #ef4444;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  /* Black shadows still read against a slightly-lighter raised surface, but
+     need more opacity than the light theme's to actually be visible. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
 
-  /* Dark canvas workspace — independent palette, not a dark-mode toggle. */
   --canvas-bg: #0b0b0f;
   --canvas-grid-dot: #1e1e26;
   --canvas-surface: #17171d;
@@ -55,34 +163,4 @@
   --canvas-text-muted: #9999a3;
   --canvas-selection: rgba(99, 102, 241, 0.18);
   --canvas-selection-border: #6366f1;
-
-  --font-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.16);
-
-  /* Post-launch refinement pass: shared motion system. One durations/easing
-     scale, reused everywhere (panels, dropdowns, hover/focus, auth-page
-     transitions) instead of ad hoc per-component values — see global.css
-     for the prefers-reduced-motion override that zeroes all of these in one
-     place, rather than each component checking it individually. */
-  --motion-fast: 120ms;
-  --motion-base: 200ms;
-  --motion-slow: 320ms;
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --ease-emphasized: cubic-bezier(0.3, 0, 0.1, 1);
 }

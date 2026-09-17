@@ -1,6 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { users, type User } from "../../db/schema.js";
+import { users, type User, type ThemePreference } from "../../db/schema.js";
 
 // Post-launch refinement pass: stable mention/search/lookup identifier.
 // Lowercase-normalized on write, matching the existing `email` convention —
@@ -98,6 +98,18 @@ export async function updatePassword(userId: string, passwordHash: string): Prom
 
 export async function updateVisibleName(userId: string, visibleName: string): Promise<void> {
   await db.update(users).set({ visibleName, updatedAt: new Date() }).where(eq(users.id, userId));
+}
+
+// Second feature pass — server-side theme preference (cross-device
+// consistency, not localStorage-only; see docs/decisions.md's addendum).
+export async function updateThemePreference(
+  userId: string,
+  themePreference: ThemePreference,
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ themePreference, updatedAt: new Date() })
+    .where(eq(users.id, userId));
 }
 
 export interface UserDisplayInfo {

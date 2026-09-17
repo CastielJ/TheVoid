@@ -5,6 +5,13 @@ export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "ev
 
 export type SelectionEntry = { kind: "task"; id: string } | { kind: "group"; id: string };
 
+export interface GroupBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface CanvasState {
   voidId: string | null;
   tasks: Map<string, Task>;
@@ -12,6 +19,27 @@ interface CanvasState {
   camera: { x: number; y: number; zoom: number };
   selection: Map<string, SelectionEntry>;
   connectionStatus: ConnectionStatus;
+
+  // Second feature pass: which Tasks are showing their expanded (inline-
+  // editing) state — client-only UI state, never persisted/server-synced,
+  // reset whenever the Void is (re)hydrated.
+  expandedTaskIds: Set<string>;
+  toggleExpanded: (taskId: string) => void;
+  isExpanded: (taskId: string) => boolean;
+
+  // A Task currently being dragged (position updates live during the drag,
+  // via setLocalPosition already) — tracked separately so CanvasViewport can
+  // derive the drag-over-Group ghost-preview bounds without lifting
+  // TaskCard's whole pointer-capture drag handler up.
+  draggingTaskId: string | null;
+  setDraggingTaskId: (taskId: string | null) => void;
+
+  // Client-only, ephemeral "if dropped here, this Group would resize to..."
+  // preview — never the real persisted group.width/height. Keyed by groupId;
+  // cleared on drag end.
+  previewGroupBounds: Map<string, GroupBounds>;
+  setPreviewGroupBounds: (groupId: string, bounds: GroupBounds) => void;
+  clearPreviewGroupBounds: () => void;
 
   hydrate: (voidId: string, tasks: Task[], groups: Group[]) => void;
   applyTask: (task: Task) => void;
@@ -41,6 +69,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   camera: { x: 0, y: 0, zoom: 1 },
   selection: new Map(),
   connectionStatus: "connecting",
+  expandedTaskIds: new Set(),
+  draggingTaskId: null,
+  previewGroupBounds: new Map(),
+
+  toggleExpanded: (taskId) =>
+    set((state) => {
+      const expandedTaskIds = new Set(state.expandedTaskIds);
+      if (expandedTaskIds.has(taskId)) expandedTaskIds.delete(taskId);
+      else expandedTaskIds.add(taskId);
+      return { expandedTaskIds };
+    }),
+  isExpanded: (taskId) => get().expandedTaskIds.has(taskId),
+
+  setDraggingTaskId: (taskId) => set({ draggingTaskId: taskId }),
+
+  setPreviewGroupBounds: (groupId, bounds) =>
+    set((state) => {
+      const previewGroupBounds = new Map(state.previewGroupBounds);
+      previewGroupBounds.set(groupId, bounds);
+      return { previewGroupBounds };
+    }),
+  clearPreviewGroupBounds: () => set({ previewGroupBounds: new Map() }),
 
   hydrate: (voidId, tasks, groups) =>
     set({
@@ -48,6 +98,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       tasks: new Map(tasks.map((t) => [t.id, t])),
       groups: new Map(groups.map((g) => [g.id, g])),
       selection: new Map(),
+      expandedTaskIds: new Set(),
+      draggingTaskId: null,
+      previewGroupBounds: new Map(),
     }),
 
   applyTask: (task) =>

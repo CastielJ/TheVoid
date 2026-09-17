@@ -15,6 +15,7 @@ import {
   updateVoidName,
   deleteVoid,
   listAccessibleVoids,
+  listAccessibleVoidsWithTeamGrants,
   listEligibleMembersForVoid,
 } from "../domains/void/voids.js";
 import {
@@ -108,6 +109,17 @@ export const voidRouter = router({
     .input(z.object({ organizationId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       return listAccessibleVoids(ctx.session.user.id, input.organizationId);
+    }),
+
+  // Second feature pass — powers the new left-panel Teams/Voids tree. Same
+  // ungated-but-self-scoped reasoning as `list` above: only Voids the caller
+  // can already access are returned, plus which Team(s) hold a grant on
+  // each one (so a Void shared between two Teams renders under both, with a
+  // "shared" badge).
+  listMineWithTeamGrants: protectedProcedure
+    .input(z.object({ organizationId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return listAccessibleVoidsWithTeamGrants(ctx.session.user.id, input.organizationId);
     }),
 
   grantAccess: protectedProcedure

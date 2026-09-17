@@ -38,6 +38,14 @@ export function TeamDetailPage() {
     onSuccess: () => utils.team.get.invalidate({ teamId }),
   });
 
+  const updateVisibility = trpc.team.updateVisibility.useMutation({
+    onSuccess: () => utils.team.get.invalidate({ teamId }),
+  });
+  const joinRequests = trpc.team.listJoinRequests.useQuery({ teamId });
+  const decideJoinRequest = trpc.team.decideJoinRequest.useMutation({
+    onSuccess: () => utils.team.listJoinRequests.invalidate({ teamId }),
+  });
+
   const availableToAdd = orgMembers.data?.filter(
     (om) => !members.data?.some((m) => m.userId === om.userId),
   );
@@ -85,6 +93,72 @@ export function TeamDetailPage() {
             </Button>
           </form>
         </Card>
+
+        <Card>
+          <h2 style={{ fontSize: 15, marginTop: 0 }}>Visibility</h2>
+          <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: -8 }}>
+            Public: visible to all Organization members. Private: visible, but joining requires a
+            request you approve or deny. Invisible: only current members can see it exists at all.
+          </p>
+          <select
+            aria-label="Team visibility"
+            value={team.data?.visibility ?? "public"}
+            onChange={(e) =>
+              updateVisibility.mutate({
+                teamId,
+                visibility: e.target.value as "public" | "private" | "invisible",
+              })
+            }
+            style={{
+              padding: "8px 10px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--color-border-strong)",
+            }}
+          >
+            <option value="public">Public</option>
+            <option value="private">Private</option>
+            <option value="invisible">Invisible</option>
+          </select>
+        </Card>
+
+        {team.data?.visibility === "private" && (
+          <section>
+            <h2 style={{ fontSize: 16 }}>Pending join requests</h2>
+            {joinRequests.data?.length === 0 && (
+              <p style={{ fontSize: 13, color: "var(--color-text-muted)" }}>No pending requests.</p>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {joinRequests.data?.map((r) => (
+                <Card
+                  key={r.id}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                >
+                  <div>
+                    {r.visibleName}{" "}
+                    <span style={{ color: "var(--color-text-muted)" }}>@{r.username}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Button
+                      onClick={() =>
+                        decideJoinRequest.mutate({ requestId: r.id, decision: "accepted" })
+                      }
+                    >
+                      Accept
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={() =>
+                        decideJoinRequest.mutate({ requestId: r.id, decision: "denied" })
+                      }
+                    >
+                      Deny
+                    </Button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </section>
+        )}
 
         <section>
           <h2 style={{ fontSize: 16 }}>Members</h2>

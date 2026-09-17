@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import {
   teamMemberships,
@@ -20,6 +20,24 @@ export async function getTeamMembership(
     .where(and(eq(teamMemberships.teamId, teamId), eq(teamMemberships.userId, userId)))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Second feature pass — powers the left-panel Teams/Voids tree's "is the
+ * current user already a member of this Team" check (to decide whether to
+ * show a join button at all), batched across every visible Team in one
+ * query rather than one getTeamMembership call per Team.
+ */
+export async function listTeamIdsUserIsMemberOf(
+  userId: string,
+  teamIds: string[],
+): Promise<Set<string>> {
+  if (teamIds.length === 0) return new Set();
+  const rows = await db
+    .select({ teamId: teamMemberships.teamId })
+    .from(teamMemberships)
+    .where(and(eq(teamMemberships.userId, userId), inArray(teamMemberships.teamId, teamIds)));
+  return new Set(rows.map((r) => r.teamId));
 }
 
 export async function listTeamMembers(teamId: string) {

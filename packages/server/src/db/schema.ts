@@ -23,6 +23,8 @@ import { taskPriorityValues as sharedTaskPriorityValues } from "@void/shared";
  * a User can exist and authenticate with no org membership at all.
  */
 
+export const themePreferenceValues = ["light", "dark", "system"] as const;
+
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
@@ -34,6 +36,10 @@ export const users = pgTable("users", {
   username: text("username").notNull().unique(),
   // Human-readable display name, editable independently of username.
   visibleName: text("visible_name").notNull(),
+  // Second feature pass: nullable, NULL means "system" (resolve via the
+  // client's prefers-color-scheme). Server-side so the choice is consistent
+  // across devices/sessions rather than per-device localStorage-only.
+  themePreference: text("theme_preference", { enum: themePreferenceValues }),
   // Nullable: magic-link-only users may never set a password (D19).
   passwordHash: text("password_hash"),
   // Nullable, only set once TOTP 2FA is enrolled (D23).
@@ -110,6 +116,7 @@ export const authTokens = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type ThemePreference = (typeof themePreferenceValues)[number];
 export type Session = typeof sessions.$inferSelect;
 export type AuthToken = typeof authTokens.$inferSelect;
 
@@ -157,6 +164,8 @@ export const memberships = pgTable(
   ],
 );
 
+export const teamVisibilityValues = ["public", "private", "invisible"] as const;
+
 export const teams = pgTable(
   "teams",
   {
@@ -165,6 +174,15 @@ export const teams = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    // Second feature pass: public (visible to all Org members, joining still
+    // requires a Team Lead/Org Admin to add someone — visibility only, not a
+    // self-join mechanism), private (visible, joining requires a
+    // teamJoinRequests row a Team Lead/Admin decides on), invisible (only
+    // current members can see this Team exists at all, enforced everywhere
+    // Teams are listed — domains/team/teams.ts's listVisibleTeamsForOrganization
+    // is the single choke point every caller goes through). Default 'public'
+    // preserves the pre-existing behavior (every Org member saw every Team).
+    visibility: text("visibility", { enum: teamVisibilityValues }).notNull().default("public"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("teams_organization_id_idx").on(table.organizationId)],
@@ -188,6 +206,46 @@ export const teamMemberships = pgTable(
     index("team_memberships_user_id_idx").on(table.userId),
   ],
 );
+
+export const teamJoinRequestStatusValues = ["pending", "accepted", "denied"] as const;
+
+/**
+ * Second feature pass — join-request workflow for a `private` Team, modeled
+ * directly on `invitations` below (same shape: created/decided/status),
+ * rather than inventing a parallel pattern. A `public` Team never generates
+ * rows here — joining a public Team still only happens via the existing
+ * Team Lead/Org Admin `addMember` path.
+ */
+export const teamJoinRequests = pgTable(
+  "team_join_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: text("status", { enum: teamJoinRequestStatusValues }).notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("team_join_requests_team_id_idx").on(table.teamId),
+    index("team_join_requests_user_id_idx").on(table.userId),
+    // At most one *live* (pending) request per Team+User — enforced at the
+    // DB level via a partial unique index, not just an application check, so
+    // a race between two concurrent requestJoin calls can't both succeed.
+    // A user whose prior request was decided can request again freely.
+    uniqueIndex("team_join_requests_team_id_user_id_pending_idx")
+      .on(table.teamId, table.userId)
+      .where(sql`${table.status} = 'pending'`),
+  ],
+);
+
+export type TeamJoinRequest = typeof teamJoinRequests.$inferSelect;
+export type TeamJoinRequestStatus = (typeof teamJoinRequestStatusValues)[number];
 
 /**
  * Transactional audit logging (ID15): every writer passes the same `tx` it
@@ -218,6 +276,7 @@ export type Organization = typeof organizations.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type MembershipRole = (typeof membershipRoleValues)[number];
 export type Team = typeof teams.$inferSelect;
+export type TeamVisibility = (typeof teamVisibilityValues)[number];
 export type TeamMembership = typeof teamMemberships.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 
@@ -595,6 +654,10 @@ export const notificationTypeValues = [
   "mentioned",
   "invited",
   "role_changed",
+  // Second feature pass — team join-request lifecycle notifications.
+  "team_join_requested",
+  "team_join_approved",
+  "team_join_denied",
 ] as const;
 
 export const notifications = pgTable(

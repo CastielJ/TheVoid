@@ -448,7 +448,9 @@ permissions → collaborate in real time through the spatial canvas.**
 - DOM/SVG virtualized canvas with WASD+mouse navigation, live WebSocket sync,
   last-write-wins conflict resolution, no presence/cursors.
 - Fixed task statuses, multi-assignee tasks, checklist items (not full
-  subtasks), freeform resizable Groups with explicit FK membership.
+  subtasks), auto-sized Groups (server-computed bounding box over member
+  Tasks — manual resize was removed in the second feature pass, see
+  `decisions.md` P2) with explicit FK membership.
 - In-app notifications only, minimal MVP event set.
 - DB-backed search + minimal cross-Void "My Tasks" view.
 - Minimal admin surface (members/teams/invites/settings) + audit-log data
