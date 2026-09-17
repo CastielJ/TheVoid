@@ -1,0 +1,39 @@
+<svg width="480" height="120" viewBox="0 0 480 120" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Void">
+  <title>Void</title>
+  <defs>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0e0e13" />
+      <stop offset="100%" stop-color="#1a1a24" />
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <linearGradient id="ring-soft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0.15" />
+    </linearGradient>
+  </defs>
+
+  <style>
+    .wordmark { fill: #17171f; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #e5e5ea; }
+    }
+  </style>
+
+  <rect x="4" y="4" width="112" height="112" rx="26" fill="#0e0e13" />
+  <circle cx="60" cy="60" r="42" stroke="url(#ring-soft)" stroke-width="1.5" />
+  <circle cx="60" cy="60" r="31" fill="url(#core)" stroke="url(#ring)" stroke-width="2.5" />
+  <circle cx="60" cy="60" r="6.5" fill="url(#ring)" />
+
+  <text
+    x="148"
+    y="78"
+    font-family="Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+    font-size="56"
+    font-weight="700"
+    letter-spacing="-1"
+    class="wordmark"
+  >Void</text>
+</svg>

@@ -1,0 +1,12 @@
+# LICENSE has no extension prettier can infer a parser from.
+LICENSE
+
+# Hand-authored SVGs (brand assets) — prettier has no SVG parser.
+assets/**/*.svg
+
+# Drizzle-generated migration metadata — machine output, not hand-formatted.
+packages/server/src/db/migrations/meta/
+
+# Generated/vendored, not source we maintain formatting on.
+pnpm-lock.yaml
+.scratch/

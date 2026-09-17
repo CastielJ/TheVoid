@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest an idea or improvement for Void.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Please check [existing issues](../../issues) and [`docs/decisions.md`](../../blob/main/docs/decisions.md) first — your idea may already be planned, deliberately deferred, or explicitly out of scope for a documented reason.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that's currently difficult or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Sketches, mockups, or links to similar features elsewhere are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches you thought about, and why you preferred this one.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else that would help us understand the request.
+    validations:
+      required: false
