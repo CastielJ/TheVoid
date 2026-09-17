@@ -63,7 +63,7 @@ describe("Phase 1: auth flows", () => {
     await client.auth.verifyEmail.mutate({ token: verifyToken });
 
     const loginResult = await client.auth.login.mutate({
-      email: "alice@example.com",
+      identifier: "alice@example.com",
       password: "correct-horse-battery",
     });
     expect(loginResult.requiresTwoFactor).toBe(false);
@@ -84,7 +84,7 @@ describe("Phase 1: auth flows", () => {
       password: "correct-horse-battery",
     });
     await client.auth.login.mutate({
-      email: "judy@example.com",
+      identifier: "judy@example.com",
       password: "correct-horse-battery",
     });
 
@@ -116,8 +116,30 @@ describe("Phase 1: auth flows", () => {
     });
 
     await expect(
-      client.auth.login.mutate({ email: "bob@example.com", password: "wrong-password-entirely" }),
+      client.auth.login.mutate({
+        identifier: "bob@example.com",
+        password: "wrong-password-entirely",
+      }),
     ).rejects.toThrow(TRPCClientError);
+  });
+
+  it("logs in with a username instead of an email", async () => {
+    const { client } = createTestClient(app);
+    await client.auth.signup.mutate({
+      email: "ursula@example.com",
+      username: "ursula",
+      visibleName: "Ursula",
+      password: "correct-horse-battery",
+    });
+
+    const result = await client.auth.login.mutate({
+      identifier: "ursula",
+      password: "correct-horse-battery",
+    });
+    expect(result.requiresTwoFactor).toBe(false);
+
+    const me = await client.auth.me.query();
+    expect(me.username).toBe("ursula");
   });
 
   it("signup does not reveal whether an account already exists", async () => {
@@ -269,7 +291,7 @@ describe("Phase 1: auth flows", () => {
     });
     await client.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
     await client.auth.login.mutate({
-      email: "frank@example.com",
+      identifier: "frank@example.com",
       password: "correct-horse-battery",
     });
 
@@ -289,7 +311,7 @@ describe("Phase 1: auth flows", () => {
     // Login with the new password must succeed.
     const { client: freshClient } = createTestClient(app);
     const login = await freshClient.auth.login.mutate({
-      email: "frank@example.com",
+      identifier: "frank@example.com",
       password: "new-correct-horse-battery",
     });
     expect(login.requiresTwoFactor).toBe(false);
@@ -305,7 +327,7 @@ describe("Phase 1: auth flows", () => {
     });
     await client.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
     await client.auth.login.mutate({
-      email: "grace@example.com",
+      identifier: "grace@example.com",
       password: "correct-horse-battery",
     });
 
@@ -326,7 +348,7 @@ describe("Phase 1: auth flows", () => {
 
     // Logging in again must now require the 2FA challenge, not issue a session directly.
     const loginResult = await client.auth.login.mutate({
-      email: "grace@example.com",
+      identifier: "grace@example.com",
       password: "correct-horse-battery",
     });
     expect(loginResult.requiresTwoFactor).toBe(true);
@@ -350,7 +372,7 @@ describe("Phase 1: auth flows", () => {
     });
     await client.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
     await client.auth.login.mutate({
-      email: "heidi@example.com",
+      identifier: "heidi@example.com",
       password: "correct-horse-battery",
     });
 
@@ -369,7 +391,7 @@ describe("Phase 1: auth flows", () => {
     await client.auth.logout.mutate();
 
     const login = await client.auth.login.mutate({
-      email: "heidi@example.com",
+      identifier: "heidi@example.com",
       password: "correct-horse-battery",
     });
     if (!login.requiresTwoFactor) throw new Error("unreachable");
@@ -383,7 +405,7 @@ describe("Phase 1: auth flows", () => {
     await client.auth.logout.mutate();
 
     const login2 = await client.auth.login.mutate({
-      email: "heidi@example.com",
+      identifier: "heidi@example.com",
       password: "correct-horse-battery",
     });
     if (!login2.requiresTwoFactor) throw new Error("unreachable");
@@ -408,13 +430,13 @@ describe("Phase 1: auth flows", () => {
     });
     await sessionA.auth.verifyEmail.mutate({ token: lastTokenSentFor("email_verification") });
     await sessionA.auth.login.mutate({
-      email: "ivan@example.com",
+      identifier: "ivan@example.com",
       password: "correct-horse-battery",
     });
 
     const { client: sessionB } = createTestClient(app);
     await sessionB.auth.login.mutate({
-      email: "ivan@example.com",
+      identifier: "ivan@example.com",
       password: "correct-horse-battery",
     });
 
@@ -431,7 +453,7 @@ describe("Phase 1: auth flows", () => {
       method: "POST",
       url: "/trpc/auth.login",
       headers: { origin: "https://evil.example.com", "content-type": "application/json" },
-      payload: JSON.stringify({ json: { email: "x@example.com", password: "whatever12345" } }),
+      payload: JSON.stringify({ json: { identifier: "x@example.com", password: "whatever12345" } }),
     });
     expect(response.statusCode).toBe(403);
   });

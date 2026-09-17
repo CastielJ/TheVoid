@@ -43,7 +43,7 @@ describe("Notifications (D39)", () => {
       visibleName: email.split("@")[0]!,
       password: "correct-horse-battery",
     });
-    await client.auth.login.mutate({ email, password: "correct-horse-battery" });
+    await client.auth.login.mutate({ identifier: email, password: "correct-horse-battery" });
     const me = await client.auth.me.query();
     return { client, userId: me.id };
   }

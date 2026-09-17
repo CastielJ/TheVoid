@@ -45,7 +45,7 @@ export function SignupPage() {
       setBreachWarning(false);
       // Login gate does not require email verification (see routers/auth.ts) —
       // signing up immediately establishes a session, same as most SaaS onboarding.
-      const result = await login.mutateAsync({ email, password });
+      const result = await login.mutateAsync({ identifier: email, password });
       if (result.requiresTwoFactor) {
         navigate("/login", { state: { email, redirectTo } });
         return;

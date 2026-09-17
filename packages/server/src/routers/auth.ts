@@ -14,15 +14,18 @@ import {
 import { setSessionCookie, clearSessionCookie } from "../domains/auth/cookies.js";
 import {
   findUserByEmail,
+  findUserByUsername,
   findUserById,
   createUser,
   markEmailVerified,
   updatePassword,
   updateVisibleName,
+  updateThemePreference,
   isUsernameTaken,
   generateUsernameFromEmail,
   USERNAME_PATTERN,
 } from "../domains/auth/users.js";
+import { themePreferenceValues } from "../db/schema.js";
 import {
   generateTotpSecret,
   buildTotpUri,
@@ -151,19 +154,31 @@ export const authRouter = router({
   }),
 
   // --- Password login (with optional 2FA challenge) -----------------------
+  // Accepts either an email or a username as the identifier — whichever the
+  // user finds easier to remember. Looked up as an email only when it
+  // contains "@" (the one unambiguous signal, since a username can never
+  // contain one per USERNAME_PATTERN); everything else is tried as a
+  // username. Never reveals which kind of identifier was recognized in the
+  // error message, same as the existing "Invalid email or password" wording.
   login: publicProcedure
     .input(
-      z.object({ email: emailSchema, password: z.string(), rememberMe: z.boolean().optional() }),
+      z.object({
+        identifier: z.string().min(1),
+        password: z.string(),
+        rememberMe: z.boolean().optional(),
+      }),
     )
     .mutation(async ({ ctx, input }) => {
-      checkRateLimit(`login:${clientIp(ctx.req)}:${input.email}`, {
+      checkRateLimit(`login:${clientIp(ctx.req)}:${input.identifier}`, {
         windowMs: 15 * 60 * 1000,
         max: 10,
       });
 
-      const user = await findUserByEmail(input.email);
+      const user = input.identifier.includes("@")
+        ? await findUserByEmail(input.identifier)
+        : await findUserByUsername(input.identifier);
       const invalidCredentials = () =>
-        new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password." });
+        new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email/username or password." });
 
       if (!user || !user.passwordHash) throw invalidCredentials();
       if (!(await verifyPassword(user.passwordHash, input.password))) throw invalidCredentials();
@@ -380,8 +395,20 @@ export const authRouter = router({
       visibleName: ctx.session.user.visibleName,
       emailVerified: Boolean(ctx.session.user.emailVerifiedAt),
       totpEnabled: Boolean(ctx.session.user.totpSecret),
+      themePreference: ctx.session.user.themePreference,
     };
   }),
+
+  // Second feature pass: server-side theme preference, so it's consistent
+  // across devices/sessions rather than reset per-device (localStorage is
+  // still used as a synchronous write-through mirror to avoid a flash of
+  // the wrong theme before this session loads — see app/theme.ts).
+  updateThemePreference: protectedProcedure
+    .input(z.object({ themePreference: z.enum(themePreferenceValues) }))
+    .mutation(async ({ ctx, input }) => {
+      await updateThemePreference(ctx.session.user.id, input.themePreference);
+      return { ok: true as const };
+    }),
 
   // visibleName only — username is set at registration and not editable in
   // this pass (no requirement to make it editable; changing it would also

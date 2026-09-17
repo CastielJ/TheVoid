@@ -14,7 +14,9 @@ export function LoginPage() {
   // back (e.g. AcceptInvitePage) — falls back to the default landing page.
   const redirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo ?? "/orgs";
   const { refetch } = useSession();
-  const [email, setEmail] = useState((location.state as { email?: string } | null)?.email ?? "");
+  const [identifier, setIdentifier] = useState(
+    (location.state as { email?: string } | null)?.email ?? "",
+  );
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export function LoginPage() {
     e.preventDefault();
     setError(null);
     try {
-      const result = await login.mutateAsync({ email, password });
+      const result = await login.mutateAsync({ identifier, password });
       if (result.requiresTwoFactor) {
         setChallengeToken(result.challengeToken);
         return;
@@ -110,14 +112,15 @@ export function LoginPage() {
           Welcome back.
         </p>
         <form onSubmit={handleLogin}>
-          <FormField label="Email" htmlFor="email">
+          <FormField label="Email or username" htmlFor="identifier">
             <Input
-              id="email"
-              type="email"
+              id="identifier"
+              type="text"
+              autoComplete="username"
               required
               autoFocus
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
             />
           </FormField>
           <FormField label="Password" htmlFor="password">
