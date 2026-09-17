@@ -2,8 +2,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import {
   memberships,
-  teamMemberships,
-  teams,
+  voidAccessGrants,
   users,
   voids,
   tasks,
@@ -104,10 +103,17 @@ export type RemoveMemberResult =
   { ok: true } | { ok: false; reason: "not_found" | "cannot_remove_owner" };
 
 /**
- * D17: Membership ends, Team memberships end. Task assignments remain
- * associated with the former member but are flagged inactive (C8/D17
- * interaction, wired up in Phase 4 now that Task exists) — for a manager to
- * later reassign, not silently dropped. All other data/history stays intact.
+ * D17: Membership ends, this Organization's Void access grants end (third
+ * feature pass: a "Team membership" is now just a VoidAccessGrant on some
+ * child Void, so ending it is a plain grant-deletion instead of a separate
+ * teamMemberships table). Access was already blocked the instant Membership
+ * flips to "removed" regardless of any lingering grant row (getVoidRole
+ * requires an active Membership before ever consulting a grant), but
+ * deleting the rows here keeps every Void's member listing accurate rather
+ * than showing a removed member who can no longer actually access anything.
+ * Task assignments remain associated with the former member but are flagged
+ * inactive (C8/D17 interaction) — for a manager to later reassign, not
+ * silently dropped. All other data/history stays intact.
  */
 export async function removeMember(
   organizationId: string,
@@ -134,23 +140,22 @@ export async function removeMember(
       .set({ status: "removed", removedAt: new Date() })
       .where(eq(memberships.id, target.id));
 
-    const orgTeamIds = tx
-      .select({ id: teams.id })
-      .from(teams)
-      .where(eq(teams.organizationId, organizationId));
+    const orgVoidIds = tx
+      .select({ id: voids.id })
+      .from(voids)
+      .where(eq(voids.organizationId, organizationId));
     await tx
-      .delete(teamMemberships)
+      .delete(voidAccessGrants)
       .where(
-        and(eq(teamMemberships.userId, targetUserId), inArray(teamMemberships.teamId, orgTeamIds)),
+        and(
+          eq(voidAccessGrants.userId, targetUserId),
+          inArray(voidAccessGrants.voidId, orgVoidIds),
+        ),
       );
 
     // D17/C8: flip this member's active assignments across the whole
     // Organization to inactive — never delete the row, so a manager can see
     // and later reassign the work.
-    const orgVoidIds = tx
-      .select({ id: voids.id })
-      .from(voids)
-      .where(eq(voids.organizationId, organizationId));
     const orgTaskIds = tx
       .select({ id: tasks.id })
       .from(tasks)

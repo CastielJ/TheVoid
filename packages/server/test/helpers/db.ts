@@ -17,14 +17,15 @@ export async function resetAuthTables(): Promise<void> {
 }
 
 /**
- * Test isolation for Phase 2 (Organizations/Teams/Membership), Phase 3
- * (Voids/Groups/Access Grants), Phase 4 (Tasks), and Phase 7 (Invitations,
- * Notifications) — most of these always cascade from Organization/Team/User
+ * Test isolation for Phase 2 (Organizations/Membership), Phase 3 (Voids/
+ * Groups/Access Grants — third feature pass merged Team into Void, a
+ * self-referencing hierarchy), Phase 4 (Tasks), and Phase 7 (Invitations,
+ * Notifications) — most of these always cascade from Organization/Void/User
  * anyway, but are listed explicitly for clarity, consistent with this
  * file's existing style.
  */
 export async function resetOrgTables(): Promise<void> {
   await db.execute(
-    sql`TRUNCATE TABLE organizations, memberships, teams, team_memberships, team_join_requests, audit_logs, voids, void_access_grants, groups, tasks, task_assignees, checklist_items, comments, task_activities, invitations, notifications, tags, task_tags, group_tags RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE TABLE organizations, memberships, audit_logs, voids, void_access_grants, void_join_requests, groups, tasks, task_assignees, checklist_items, comments, task_activities, invitations, notifications, tags, task_tags, group_tags RESTART IDENTITY CASCADE`,
   );
 }

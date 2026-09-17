@@ -69,6 +69,16 @@ collaborate with your team.**
 
 ## 4. Terminology / Glossary
 
+> **Superseded as of the third feature pass** (`decisions.md`'s dated
+> "Third Feature Pass" section): Team is no longer a separate entity.
+> `Team`/`Team Lead`/`TeamMembership` below, and `Void.team_id`, describe
+> the original MVP-lock-in design and are kept for historical context. The
+> current model: `Void` is self-referencing (`parentVoidId`); a "Team" is
+> just a Void nested under its parent, with its own canvas; "Team Lead"
+> collapsed into a `VoidAccessGrant.role = 'manager'` grant on that child
+> Void; `VoidAccessGrant` is always a plain per-user grant now (no
+> Team-target variant).
+
 | Term                | Meaning                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Organization**    | The tenant boundary. All data (Teams, Voids, Groups, Tasks, Memberships) is scoped to exactly one Organization. A User can hold independent Memberships in multiple Organizations.                                                                                                                                                                                            |
@@ -434,23 +444,37 @@ not something to silently work around.
 ## 17. MVP Scope (Summary)
 
 The MVP proves this core loop: **create organization → invite/join users →
-create Teams → create Voids → create Groups/Tasks → assign tasks → manage
-permissions → collaborate in real time through the spatial canvas.**
+create Voids (optionally nested into Teams) → create Groups/Tasks → assign
+tasks → manage permissions → collaborate in real time through the spatial
+canvas.**
 
 **In MVP:**
 
-- Full Org/Team/Void/Group/Task data model as described in §5.
+- Org/Void/Group/Task data model as described in §5 — **Team is no longer a
+  separate entity as of the third feature pass** (`decisions.md` Q1): Void
+  is now a self-referencing hierarchy (`parentVoidId`), and a "Team" is just
+  a Void nested one or more levels under its parent, with its own canvas.
+  §5's Team/TeamMembership description below is the original MVP-lock-in
+  design and is kept for historical context, but no longer reflects the
+  current schema — see `decisions.md`'s third-feature-pass section for the
+  current model.
 - Email+password + magic-link auth, optional TOTP 2FA, server-side sessions
   with device management.
 - Email-only invitations (no static join codes).
-- Fixed 3-tier org roles + Team Lead + 3-tier Void roles (Viewer/Editor/
-  Manager), capability-based permission checks.
+- Fixed 3-tier org roles + 3-tier Void roles (Viewer/Editor/Manager),
+  capability-based permission checks — "Team Lead" collapsed into a plain
+  Manager-role grant on that child Void (third feature pass).
 - DOM/SVG virtualized canvas with WASD+mouse navigation, live WebSocket sync,
   last-write-wins conflict resolution, no presence/cursors.
 - Fixed task statuses, multi-assignee tasks, checklist items (not full
   subtasks), auto-sized Groups (server-computed bounding box over member
   Tasks — manual resize was removed in the second feature pass, see
-  `decisions.md` P2) with explicit FK membership.
+  `decisions.md` P2; the per-task height math became content-aware in the
+  third feature pass, see `decisions.md` Q4) with explicit FK membership.
+- Task editing: description/status/priority/due date/tags are an explicit
+  Save/Discard draft on the expanded card (third feature pass, `decisions.md`
+  Q5) — not autosave-per-field. Checklist/comments/assignees/title/the
+  done-toggle remain immediate.
 - In-app notifications only, minimal MVP event set.
 - DB-backed search + minimal cross-Void "My Tasks" view.
 - Minimal admin surface (members/teams/invites/settings) + audit-log data

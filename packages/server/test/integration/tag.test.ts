@@ -33,7 +33,7 @@ describe("Tag domain (post-launch refinement pass)", () => {
   async function setupVoid(orgName: string) {
     const owner = await createUser(`owner-${Math.random()}@example.com`);
     const org = await createOrganization(owner.id, orgName);
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
     return { owner, org, void: voidResult.void };
   }

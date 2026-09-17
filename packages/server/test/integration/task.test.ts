@@ -35,7 +35,7 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
   async function setupVoid() {
     const owner = await createUser(`owner-${Math.random()}@example.com`);
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
     return { owner, org, void: voidResult.void };
   }
@@ -43,7 +43,7 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
   it("createTask rejects a Group that does not belong to the same Void (C3)", async () => {
     const { owner, void: voidA } = await setupVoid();
     const orgResult = await createOrganization(owner.id, "Other Org for owner");
-    const voidB = await createVoid(orgResult.id, "Void B", null, owner.id);
+    const voidB = await createVoid(orgResult.id, "Void B", null, "private", owner.id);
     if (!voidB.ok) throw new Error("unreachable");
     const groupInB = await createGroup({
       voidId: voidB.void.id,
@@ -99,7 +99,7 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
   it("moveTask rejects moving into a Group from a different Void (C3) and records group_id activity on success", async () => {
     const { owner, void: v } = await setupVoid();
     const otherOrg = await createOrganization(owner.id, "Other");
-    const otherVoid = await createVoid(otherOrg.id, "Other Void", null, owner.id);
+    const otherVoid = await createVoid(otherOrg.id, "Other Void", null, "private", owner.id);
     if (!otherVoid.ok) throw new Error("unreachable");
     const foreignGroup = await createGroup({
       voidId: otherVoid.void.id,

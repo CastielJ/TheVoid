@@ -25,7 +25,7 @@ describe("Group domain (implementation-plan.md Phase 3, D7: flat, no nesting)", 
   it("createGroup persists position/size and defaults version to 1", async () => {
     const owner = await createUser("owner@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
 
     const group = await createGroup({
@@ -44,7 +44,7 @@ describe("Group domain (implementation-plan.md Phase 3, D7: flat, no nesting)", 
   it("updateGroup increments version on every write and never accepts a void_id override", async () => {
     const owner = await createUser("owner2@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
 
     const group = await createGroup({
@@ -70,7 +70,7 @@ describe("Group domain (implementation-plan.md Phase 3, D7: flat, no nesting)", 
   it("listGroupsForVoid excludes Groups whose Void has been soft-deleted (architecture.md §6.2)", async () => {
     const owner = await createUser("owner3@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
 
     await createGroup({ voidId: voidResult.void.id, name: "A", x: 0, y: 0, width: 10, height: 10 });
@@ -88,7 +88,7 @@ describe("Group domain (implementation-plan.md Phase 3, D7: flat, no nesting)", 
   it("deleteGroup removes the row", async () => {
     const owner = await createUser("owner4@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
 
     const group = await createGroup({

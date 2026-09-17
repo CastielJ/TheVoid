@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useLeftPanel } from "./LeftPanelContext";
 import { ThemeToggle } from "../ui/ThemeToggle";
-import { TeamsVoidsTree } from "../features/team/TeamsVoidsTree";
+import { VoidTree } from "../features/void/VoidTree";
 import { getRecentVoids } from "./recentVoids";
 
 const SHORTCUTS: [string, string][] = [
@@ -133,7 +133,7 @@ export function LeftPanel() {
           </div>
         )}
 
-        {organizationId && <TeamsVoidsTree organizationId={organizationId} />}
+        {organizationId && <VoidTree organizationId={organizationId} />}
 
         <div style={{ marginTop: 16 }}>
           <h3

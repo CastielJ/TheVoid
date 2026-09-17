@@ -8,7 +8,8 @@ import { SignupPage } from "./features/auth/SignupPage";
 import { VerifyEmailPage } from "./features/auth/VerifyEmailPage";
 import { OrgListPage } from "./features/org/OrgListPage";
 import { OrgDashboardPage } from "./features/org/OrgDashboardPage";
-import { TeamDetailPage } from "./features/team/TeamDetailPage";
+import { VoidCreateWizardPage } from "./features/void/VoidCreateWizardPage";
+import { VoidSettingsPage } from "./features/void/VoidSettingsPage";
 import { CanvasPage } from "./canvas/CanvasPage";
 import { AcceptInvitePage } from "./features/invite/AcceptInvitePage";
 import { MyTasksPage } from "./features/myTasks/MyTasksPage";
@@ -35,7 +36,8 @@ export function App() {
             <Route path="/orgs" element={<OrgListPage />} />
             <Route path="/orgs/:orgId" element={<OrgDashboardPage />} />
             <Route path="/orgs/:orgId/my-tasks" element={<MyTasksPage />} />
-            <Route path="/orgs/:orgId/teams/:teamId" element={<TeamDetailPage />} />
+            <Route path="/orgs/:orgId/voids/new" element={<VoidCreateWizardPage />} />
+            <Route path="/orgs/:orgId/voids/:voidId/settings" element={<VoidSettingsPage />} />
             <Route path="/orgs/:orgId/voids/:voidId" element={<CanvasPage />} />
             <Route path="/account" element={<AccountPage />} />
           </Route>

@@ -48,6 +48,13 @@ const { resetAuthTables, resetOrgTables } = await import("../../server/test/help
  * username/visibleName (identity display everywhere switched from raw
  * email to "Visible Name (@username)"), and Group/Task creation switched
  * from toolbar buttons to the double-click-on-canvas creation panel.
+ *
+ * Updated for the third feature pass: Team was merged into Void (a self-
+ * referencing hierarchy) — there is no more separate Team entity/creation
+ * flow. "Engineering" below is now just a Void itself (private by default),
+ * created and configured through the new 3-step wizard (name → visibility
+ * → members) at /orgs/:orgId/voids/new, with the member added directly
+ * during the wizard's members step instead of a separate addMember call.
  */
 test.beforeEach(async () => {
   await resetOrgTables();
@@ -67,7 +74,7 @@ async function signup(
   await page.waitForURL("**/orgs");
 }
 
-test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign -> authorized access -> unauthorized denial", async ({
+test("signup -> org -> invite(seeded) -> void (wizard) -> group -> task -> assign -> authorized access -> unauthorized denial -> visibility+join-request", async ({
   browser,
 }) => {
   const stamp = Date.now();
@@ -118,27 +125,18 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
     .insert(memberships)
     .values({ organizationId: orgId, userId: memberUser!.id, role: "member" });
 
-  // --- 4. create Team, add the member to it ------------------------------------
-  await ownerPage.fill("#team-name", "Engineering");
-  await ownerPage.click('button:has-text("Create Team")');
-  await expect(ownerPage.getByTestId("team-name")).toHaveText("Engineering");
-  await ownerPage.click('a:has-text("Manage")');
-  await ownerPage.waitForURL("**/teams/*");
-  await expect(ownerPage.getByLabel("Add organization member")).toContainText("Member E2E");
+  // --- 4. create a Void ("Engineering") via the wizard, add the member to it --
+  await ownerPage.goto(`/orgs/${orgId}/voids/new`);
+  await ownerPage.fill("#new-void-name", "Engineering");
+  await ownerPage.click('button:has-text("Next")'); // step 1 -> 2 (name -> visibility)
+  await ownerPage.click('button:has-text("Next")'); // step 2 -> 3 (creates the Void, private by default)
+  await expect(ownerPage.getByLabel("Add member")).toContainText("Member E2E");
   await ownerPage
-    .getByLabel("Add organization member")
+    .getByLabel("Add member")
     .selectOption({ label: `Member E2E (@${memberUsername})` });
   await ownerPage.click('button:has-text("Add")');
   await expect(ownerPage.getByText("Member E2E")).toBeVisible();
-
-  // --- 5. create Void, associated with that Team (D14 default Team grant) -----
-  await ownerPage.goto(`/orgs/${orgId}`);
-  await ownerPage.fill("#void-name", "Product Roadmap");
-  // team.list resolves asynchronously after mount — wait for the option to
-  // actually exist before selecting it, rather than racing the fetch.
-  await expect(ownerPage.getByLabel("Team (optional)")).toContainText("Engineering");
-  await ownerPage.getByLabel("Team (optional)").selectOption({ label: "Engineering" });
-  await ownerPage.click('button:has-text("Create Void")');
+  await ownerPage.click('button:has-text("Done")');
   await ownerPage.waitForURL("**/voids/*");
   const voidUrl = ownerPage.url();
   await ownerPage.waitForSelector('[data-testid="canvas-viewport"]');
@@ -169,7 +167,7 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
     ownerPage.locator('[data-testid="task-card"]').getByText("Member E2E"),
   ).toBeVisible();
 
-  // --- 9. authorized user (the member, via their Team's default grant) can access/edit it ---
+  // --- 9. authorized user (the member, via their direct grant) can access/edit it ---
   await memberPage.goto(voidUrl);
   await memberPage.waitForSelector('[data-testid="canvas-viewport"]');
   await expect(memberPage.locator('[data-testid="task-card"]')).toBeVisible();
@@ -177,6 +175,9 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   await memberPage.waitForSelector('[aria-label="Description"]');
   await memberPage.getByLabel("Status").selectOption("in_progress");
   await expect(memberPage.getByLabel("Status")).toHaveValue("in_progress");
+  // Third feature pass: Status is now part of the Save/Discard draft, not
+  // autosaved on change — must explicitly Save before it persists.
+  await memberPage.click('button:has-text("Save")');
   // The edit is live for the Owner too (D32), confirming it actually persisted server-side.
   await expect(ownerPage.getByLabel("Status")).toHaveValue("in_progress");
 
@@ -184,9 +185,11 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
   await strangerPage.goto(voidUrl);
   await expect(strangerPage.getByText("You do not have access to this Void.")).toBeVisible();
 
-  // --- 11. second feature pass: Team visibility + join-request flow -------------
-  // Make "Engineering" private, have the stranger (an Org member, but not on
-  // that Team) request to join, and the Owner accept it via TeamDetailPage.
+  // --- 11. third feature pass: Void visibility + join-request flow --------------
+  // "Engineering" is already private (the wizard's default) — have the
+  // stranger (an Org member, but never granted access) discover it via the
+  // left panel tree's root-level listing and request to join, and the Owner
+  // accept it via the Void's own settings page.
   const {
     rows: [strangerUser],
   } = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [strangerEmail]);
@@ -194,21 +197,15 @@ test("signup -> org -> invite(seeded) -> team -> void -> group -> task -> assign
     .insert(memberships)
     .values({ organizationId: orgId, userId: strangerUser!.id, role: "member" });
 
-  await ownerPage.goto(`/orgs/${orgId}`);
-  await ownerPage.click('a:has-text("Manage")');
-  await ownerPage.waitForURL("**/teams/*");
-  await ownerPage.getByLabel("Team visibility").selectOption("private");
-
-  // TeamDetailPage itself is gated to Team Lead/Org Admin (canManageTeam) —
-  // a plain member like the stranger can't open it directly. The
-  // join-request affordance instead lives in the new left-panel Teams/Voids
-  // tree, reachable from any page (here, the Org dashboard).
+  // A private-but-not-invisible top-level Void is discoverable to any Org
+  // member from the left panel's root-level tree, even without a grant —
+  // reachable from any page (here, the Org dashboard).
   await strangerPage.goto(`/orgs/${orgId}`);
   await strangerPage.getByLabel("Open panel").click();
   await strangerPage.getByRole("button", { name: "Request to join" }).click();
-  await expect(strangerPage.getByText("Request pending")).toBeVisible();
+  await expect(strangerPage.getByText("Pending")).toBeVisible();
 
-  await ownerPage.reload();
+  await ownerPage.goto(`${voidUrl}/settings`);
   await expect(ownerPage.getByRole("heading", { name: "Pending join requests" })).toBeVisible();
   await ownerPage.click('button:has-text("Accept")');
   await expect(ownerPage.getByText("No pending requests.")).toBeVisible();

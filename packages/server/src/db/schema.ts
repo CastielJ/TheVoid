@@ -10,10 +10,10 @@ import {
   jsonb,
   doublePrecision,
   bigint,
-  check,
   date,
   integer,
   primaryKey,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { taskPriorityValues as sharedTaskPriorityValues } from "@void/shared";
 
@@ -164,88 +164,11 @@ export const memberships = pgTable(
   ],
 );
 
-export const teamVisibilityValues = ["public", "private", "invisible"] as const;
-
-export const teams = pgTable(
-  "teams",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    organizationId: uuid("organization_id")
-      .notNull()
-      .references(() => organizations.id, { onDelete: "cascade" }),
-    name: text("name").notNull(),
-    // Second feature pass: public (visible to all Org members, joining still
-    // requires a Team Lead/Org Admin to add someone — visibility only, not a
-    // self-join mechanism), private (visible, joining requires a
-    // teamJoinRequests row a Team Lead/Admin decides on), invisible (only
-    // current members can see this Team exists at all, enforced everywhere
-    // Teams are listed — domains/team/teams.ts's listVisibleTeamsForOrganization
-    // is the single choke point every caller goes through). Default 'public'
-    // preserves the pre-existing behavior (every Org member saw every Team).
-    visibility: text("visibility", { enum: teamVisibilityValues }).notNull().default("public"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [index("teams_organization_id_idx").on(table.organizationId)],
-);
-
-export const teamMemberships = pgTable(
-  "team_memberships",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    teamId: uuid("team_id")
-      .notNull()
-      .references(() => teams.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    isTeamLead: boolean("is_team_lead").notNull().default(false),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex("team_memberships_team_id_user_id_idx").on(table.teamId, table.userId),
-    index("team_memberships_user_id_idx").on(table.userId),
-  ],
-);
-
-export const teamJoinRequestStatusValues = ["pending", "accepted", "denied"] as const;
-
-/**
- * Second feature pass — join-request workflow for a `private` Team, modeled
- * directly on `invitations` below (same shape: created/decided/status),
- * rather than inventing a parallel pattern. A `public` Team never generates
- * rows here — joining a public Team still only happens via the existing
- * Team Lead/Org Admin `addMember` path.
- */
-export const teamJoinRequests = pgTable(
-  "team_join_requests",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    teamId: uuid("team_id")
-      .notNull()
-      .references(() => teams.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    status: text("status", { enum: teamJoinRequestStatusValues }).notNull().default("pending"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    decidedBy: uuid("decided_by").references(() => users.id),
-    decidedAt: timestamp("decided_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("team_join_requests_team_id_idx").on(table.teamId),
-    index("team_join_requests_user_id_idx").on(table.userId),
-    // At most one *live* (pending) request per Team+User — enforced at the
-    // DB level via a partial unique index, not just an application check, so
-    // a race between two concurrent requestJoin calls can't both succeed.
-    // A user whose prior request was decided can request again freely.
-    uniqueIndex("team_join_requests_team_id_user_id_pending_idx")
-      .on(table.teamId, table.userId)
-      .where(sql`${table.status} = 'pending'`),
-  ],
-);
-
-export type TeamJoinRequest = typeof teamJoinRequests.$inferSelect;
-export type TeamJoinRequestStatus = (typeof teamJoinRequestStatusValues)[number];
+// Third feature pass — Team was merged into Void (a self-referencing
+// hierarchy, see the `voids` table below): a "Team" is now just a Void row
+// with a non-null `parentVoidId`. This enum, originally Team-only, now
+// governs visibility for every Void regardless of nesting depth.
+export const voidVisibilityValues = ["public", "private", "invisible"] as const;
 
 /**
  * Transactional audit logging (ID15): every writer passes the same `tx` it
@@ -275,9 +198,6 @@ export const auditLogs = pgTable(
 export type Organization = typeof organizations.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type MembershipRole = (typeof membershipRoleValues)[number];
-export type Team = typeof teams.$inferSelect;
-export type TeamVisibility = (typeof teamVisibilityValues)[number];
-export type TeamMembership = typeof teamMemberships.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 
 /**
@@ -292,9 +212,29 @@ export const voids = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    // Nullable; default-visibility hint only (D14) — NOT the access-control
-    // mechanism. Access is always governed by voidAccessGrants (C1/#4).
-    teamId: uuid("team_id").references(() => teams.id),
+    // Third feature pass — Void is now a self-referencing hierarchy: NULL
+    // means a top-level Void, non-null means this row is a "Team" (a child
+    // Void nested under its parent — imagine a subdirectory). Unlimited
+    // nesting depth is allowed by design; the UI just happens to usually
+    // stop at one level. `onDelete: "cascade"` is a dormant safety net —
+    // the app only ever soft-deletes Voids (see `deletedAt` below), so this
+    // only fires on a genuine hard row delete, which never happens in
+    // normal operation.
+    parentVoidId: uuid("parent_void_id").references((): AnyPgColumn => voids.id, {
+      onDelete: "cascade",
+    }),
+    // Applies uniformly at every nesting depth (a top-level Void and a
+    // deeply-nested child Void both use the same three-tier model): public
+    // (visible to all Org members in listings, joining still requires a
+    // Manager/Org Admin to grant access — visibility only, not a self-join
+    // mechanism), private (visible, joining requires a voidJoinRequests row
+    // a Manager/Org Admin decides on), invisible (only current members can
+    // see this Void exists at all, enforced everywhere Voids are listed —
+    // domains/void/voids.ts's listChildVoids/listTopLevelAccessibleVoids are
+    // the choke points every caller goes through). Default 'private' matches
+    // the pre-existing implicit behavior (a Void was invisible to anyone
+    // without a grant before this column existed).
+    visibility: text("visibility", { enum: voidVisibilityValues }).notNull().default("private"),
     name: text("name").notNull(),
     createdBy: uuid("created_by")
       .notNull()
@@ -307,7 +247,7 @@ export const voids = pgTable(
   },
   (table) => [
     index("voids_organization_id_idx").on(table.organizationId),
-    index("voids_team_id_idx").on(table.teamId),
+    index("voids_parent_void_id_idx").on(table.parentVoidId),
   ],
 );
 
@@ -320,10 +260,14 @@ export const voidAccessGrants = pgTable(
     voidId: uuid("void_id")
       .notNull()
       .references(() => voids.id, { onDelete: "cascade" }),
-    // Exactly one of teamId / userId is set (CHECK below) — the explicit
-    // access-control mechanism (Non-negotiable #4, architecture.md §4).
-    teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }),
-    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    // Third feature pass — Team was merged into Void, so "grant to a whole
+    // Team" no longer exists as a separate concept (a Team's own members are
+    // just plain per-user grants on that child Void). Every grant is now a
+    // plain per-user grant — the explicit access-control mechanism
+    // (Non-negotiable #4, architecture.md §4).
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     role: text("role", { enum: voidAccessGrantRoleValues }).notNull(),
     grantedBy: uuid("granted_by")
       .notNull()
@@ -332,20 +276,58 @@ export const voidAccessGrants = pgTable(
   },
   (table) => [
     index("void_access_grants_void_id_idx").on(table.voidId),
-    index("void_access_grants_team_id_idx").on(table.teamId),
     index("void_access_grants_user_id_idx").on(table.userId),
-    check(
-      "void_access_grants_exactly_one_target_check",
-      sql`(${table.teamId} IS NOT NULL AND ${table.userId} IS NULL) OR (${table.teamId} IS NULL AND ${table.userId} IS NOT NULL)`,
-    ),
-    // At most one grant per (Void, Team) and per (Void, User) — keeps
-    // "highest role among matches" well-defined and revocation unambiguous.
-    // Postgres treats each NULL as distinct, so these two indexes only
-    // constrain team-grants and user-grants respectively, never each other.
-    uniqueIndex("void_access_grants_void_id_team_id_idx").on(table.voidId, table.teamId),
+    // At most one grant per (Void, User) — keeps role lookup unambiguous
+    // and revocation well-defined.
     uniqueIndex("void_access_grants_void_id_user_id_idx").on(table.voidId, table.userId),
   ],
 );
+
+export const voidJoinRequestStatusValues = ["pending", "accepted", "denied"] as const;
+
+/**
+ * Third feature pass — join-request workflow for a `private` Void (at any
+ * nesting depth, top-level or a child "Team"), modeled directly on
+ * `invitations` below (same shape: created/decided/status). Renamed from
+ * the second pass's Team-only `teamJoinRequests` now that Team no longer
+ * exists as a separate entity. A `public` Void never generates rows here —
+ * joining a public Void still only happens via a Manager/Org Admin granting
+ * access directly, not a self-join mechanism.
+ */
+export const voidJoinRequests = pgTable(
+  "void_join_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    voidId: uuid("void_id")
+      .notNull()
+      .references(() => voids.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: text("status", { enum: voidJoinRequestStatusValues }).notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    // The role the deciding Manager chose to grant on accept (viewer/editor/
+    // manager) — not a fixed default; recorded here for audit clarity. NULL
+    // until decided (and always NULL on a denied request).
+    grantedRole: text("granted_role", { enum: voidAccessGrantRoleValues }),
+  },
+  (table) => [
+    index("void_join_requests_void_id_idx").on(table.voidId),
+    index("void_join_requests_user_id_idx").on(table.userId),
+    // At most one *live* (pending) request per Void+User — enforced at the
+    // DB level via a partial unique index, not just an application check, so
+    // a race between two concurrent requestJoin calls can't both succeed.
+    // A user whose prior request was decided can request again freely.
+    uniqueIndex("void_join_requests_void_id_user_id_pending_idx")
+      .on(table.voidId, table.userId)
+      .where(sql`${table.status} = 'pending'`),
+  ],
+);
+
+export type VoidJoinRequest = typeof voidJoinRequests.$inferSelect;
+export type VoidJoinRequestStatus = (typeof voidJoinRequestStatusValues)[number];
 
 export const groups = pgTable(
   "groups",
@@ -377,6 +359,7 @@ export const groups = pgTable(
 );
 
 export type Void = typeof voids.$inferSelect;
+export type VoidVisibility = (typeof voidVisibilityValues)[number];
 export type VoidAccessGrant = typeof voidAccessGrants.$inferSelect;
 export type VoidAccessGrantRole = (typeof voidAccessGrantRoleValues)[number];
 export type Group = typeof groups.$inferSelect;
@@ -654,10 +637,12 @@ export const notificationTypeValues = [
   "mentioned",
   "invited",
   "role_changed",
-  // Second feature pass — team join-request lifecycle notifications.
-  "team_join_requested",
-  "team_join_approved",
-  "team_join_denied",
+  // Third feature pass — Void join-request lifecycle notifications (renamed
+  // from the second pass's Team-only variants now that Team no longer
+  // exists as a separate entity — see voidJoinRequests above).
+  "void_join_requested",
+  "void_join_approved",
+  "void_join_denied",
 ] as const;
 
 export const notifications = pgTable(

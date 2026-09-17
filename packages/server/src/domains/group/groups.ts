@@ -1,6 +1,7 @@
 import { eq, and, isNull, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { groups, tasks, voids, type Group } from "../../db/schema.js";
+import { listTaskIdsWithBadges } from "../task/taskContentFlags.js";
 
 // Same structural-typing pattern as domains/audit/auditLog.ts /
 // domains/task/taskActivity.ts: callers pass their own `tx` so this joins
@@ -11,15 +12,26 @@ type DbClient = Pick<typeof db, "select" | "update">;
 /**
  * Second feature pass — Groups switched from client-settable width/height
  * (manual drag-resize) to fully server-computed, auto-sized bounds: a Group
- * auto-grows/shrinks to fit its member Tasks. TASK_BBOX_* mirrors the
- * frontend's TASK_FOOTPRINT_COMPACT (packages/web/src/canvas/spatialIndex.ts)
- * — the server has no per-client expand-state knowledge, so it always uses
- * the compact/smaller footprint for this math (a user's own live drag state
- * is shown via a separate client-only "ghost preview", never this server
- * value).
+ * auto-grows/shrinks to fit its member Tasks. TASK_BBOX_WIDTH mirrors the
+ * frontend's compact TaskCard's real rendered width exactly (both are 220,
+ * confirmed by direct measurement, not a guess) — the server has no
+ * per-client expand-state knowledge, so it always uses the compact/smaller
+ * footprint for this math (a user's own live drag state is shown via a
+ * separate client-only "ghost preview", never this server value).
+ *
+ * Third feature pass fix — a flat per-task height was the original bug: a
+ * compact card's real height has exactly two states (measured directly in
+ * a running browser, not guessed): TASK_BBOX_HEIGHT_BASE when it shows no
+ * count badges, TASK_BBOX_HEIGHT_WITH_BADGES when it shows any (checklist/
+ * comment/tag/assignee > 0 — a due date does NOT add height, it shares the
+ * status row). `recomputeGroupBounds` now looks up which member Tasks
+ * actually have badges (`listTaskIdsWithBadges`, mirrored exactly by
+ * `GROUP_PREVIEW_*` in CanvasViewport.tsx) instead of assuming one flat
+ * number for every Task regardless of content.
  */
 const TASK_BBOX_WIDTH = 220;
-const TASK_BBOX_HEIGHT = 96;
+const TASK_BBOX_HEIGHT_BASE = 76;
+const TASK_BBOX_HEIGHT_WITH_BADGES = 100;
 const GROUP_PADDING = 24;
 export const GROUP_MIN_WIDTH = 280;
 export const GROUP_MIN_HEIGHT = 160;
@@ -51,7 +63,7 @@ export async function createGroup(input: CreateGroupInput): Promise<Group> {
  */
 export async function recomputeGroupBounds(tx: DbClient, groupId: string): Promise<Group> {
   const memberTasks = await tx
-    .select({ x: tasks.x, y: tasks.y })
+    .select({ id: tasks.id, x: tasks.x, y: tasks.y })
     .from(tasks)
     .where(and(eq(tasks.groupId, groupId), isNull(tasks.deletedAt)));
 
@@ -69,10 +81,14 @@ export async function recomputeGroupBounds(tx: DbClient, groupId: string): Promi
     return updated!;
   }
 
+  const taskIdsWithBadges = await listTaskIdsWithBadges(memberTasks.map((t) => t.id));
+  const heightFor = (taskId: string) =>
+    taskIdsWithBadges.has(taskId) ? TASK_BBOX_HEIGHT_WITH_BADGES : TASK_BBOX_HEIGHT_BASE;
+
   const minX = Math.min(...memberTasks.map((t) => t.x));
   const minY = Math.min(...memberTasks.map((t) => t.y));
   const maxX = Math.max(...memberTasks.map((t) => t.x + TASK_BBOX_WIDTH));
-  const maxY = Math.max(...memberTasks.map((t) => t.y + TASK_BBOX_HEIGHT));
+  const maxY = Math.max(...memberTasks.map((t) => t.y + heightFor(t.id)));
 
   const x = minX - GROUP_PADDING;
   const y = minY - GROUP_PADDING;

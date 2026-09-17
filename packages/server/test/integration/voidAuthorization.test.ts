@@ -4,8 +4,6 @@ import { pool, db } from "../../src/db/client.js";
 import { memberships, voids } from "../../src/db/schema.js";
 import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
-import { createTeam } from "../../src/domains/team/teams.js";
-import { addTeamMember, setTeamLead } from "../../src/domains/team/teamMemberships.js";
 import { createVoid, deleteVoid } from "../../src/domains/void/voids.js";
 import { grantVoidAccess } from "../../src/domains/void/voidAccessGrants.js";
 import {
@@ -14,15 +12,17 @@ import {
   canEditVoid,
   canManageVoidAccess,
   canDeleteVoid,
-  canCreateVoidForTeam,
 } from "../../src/authorization/capabilities.js";
 import { resetAuthTables, resetOrgTables } from "../helpers/db.js";
 
 /**
  * Tier 1 coverage (implementation-plan.md §9 Phase 3): the C1 regression —
  * an Org Admin/Owner with no VoidAccessGrant must be denied access to a
- * private Void — plus getVoidRole's resolution order, the A1/A2 default-
- * grant logic, cross-Team Team-Lead scoping, and the ID1 deletion exception.
+ * private Void — plus getVoidRole's resolution order, the A2 default-grant
+ * logic, and the ID1 deletion exception. Third feature pass: canCreateChildVoid
+ * coverage lives in authorization.test.ts alongside the other capability
+ * functions (Team merged into Void, so there's no more Team-derived grant
+ * branch in getVoidRole to test here).
  */
 describe("Void authorization (architecture.md §3, corrected per C1)", () => {
   beforeEach(async () => {
@@ -42,7 +42,7 @@ describe("Void authorization (architecture.md §3, corrected per C1)", () => {
       .insert(memberships)
       .values({ organizationId: org.id, userId: member.id, role: "member" });
 
-    const result = await createVoid(org.id, "Member's private Void", null, member.id);
+    const result = await createVoid(org.id, "Member's private Void", null, "private", member.id);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
 
@@ -54,11 +54,11 @@ describe("Void authorization (architecture.md §3, corrected per C1)", () => {
     expect(await getVoidRole(owner.id, result.void.id)).toBeNull();
   });
 
-  it("A2: the creator of a private (Team-less) Void becomes its Manager by default", async () => {
+  it("A2: the creator of a private top-level Void becomes its Manager by default", async () => {
     const owner = await createUser("owner2@example.com");
     const org = await createOrganization(owner.id, "Acme");
 
-    const result = await createVoid(org.id, "Personal Void", null, owner.id);
+    const result = await createVoid(org.id, "Personal Void", null, "private", owner.id);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
 
@@ -66,74 +66,37 @@ describe("Void authorization (architecture.md §3, corrected per C1)", () => {
     expect(await canManageVoidAccess(owner.id, result.void.id)).toBe(true);
   });
 
-  it("A1 (generalized): the creator of a Team-associated Void becomes its Manager directly, while the Team gets a default Editor grant", async () => {
+  it('the creator of a child Void ("Team") becomes its Manager directly — no membership is inherited from the parent Void', async () => {
     const owner = await createUser("owner3@example.com");
-    const lead = await createUser("lead3@example.com");
-    const regularMember = await createUser("regular3@example.com");
+    const creator = await createUser("creator3@example.com");
+    const parentMember = await createUser("parentmember3@example.com");
     const org = await createOrganization(owner.id, "Acme");
     await db.insert(memberships).values([
-      { organizationId: org.id, userId: lead.id, role: "member" },
-      { organizationId: org.id, userId: regularMember.id, role: "member" },
+      { organizationId: org.id, userId: creator.id, role: "member" },
+      { organizationId: org.id, userId: parentMember.id, role: "member" },
     ]);
-    const team = await createTeam(org.id, "Engineering", owner.id);
-    await addTeamMember(team.id, lead.id, owner.id);
-    await setTeamLead(team.id, lead.id, true, owner.id);
-    await addTeamMember(team.id, regularMember.id, owner.id);
+    const parentResult = await createVoid(org.id, "Engineering", null, "private", owner.id);
+    if (!parentResult.ok) throw new Error("unreachable");
+    const parent = parentResult.void;
+    await grantVoidAccess(parent.id, creator.id, "manager", owner.id);
+    await grantVoidAccess(parent.id, parentMember.id, "editor", owner.id);
 
-    const result = await createVoid(org.id, "Team Void", team.id, lead.id);
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("unreachable");
+    const childResult = await createVoid(org.id, "Team Void", parent.id, "private", creator.id);
+    expect(childResult.ok).toBe(true);
+    if (!childResult.ok) throw new Error("unreachable");
 
-    // Creator (Team Lead) gets a direct Manager grant.
-    expect(await getVoidRole(lead.id, result.void.id)).toBe("manager");
-    // Direct grant wins outright over the Team's own grant (resolution order).
-    // A plain Team member with no direct grant gets the Team's default role.
-    expect(await getVoidRole(regularMember.id, result.void.id)).toBe("editor");
-    expect(await canEditVoid(regularMember.id, result.void.id)).toBe(true);
-    expect(await canManageVoidAccess(regularMember.id, result.void.id)).toBe(false);
-  });
-
-  it("canCreateVoidForTeam (and therefore Void creation) is scoped to the Team Lead's own Team, not other Teams", async () => {
-    const owner = await createUser("owner4@example.com");
-    const leadOfA = await createUser("lead4@example.com");
-    const org = await createOrganization(owner.id, "Acme");
-    await db
-      .insert(memberships)
-      .values({ organizationId: org.id, userId: leadOfA.id, role: "member" });
-    const teamA = await createTeam(org.id, "Engineering", owner.id);
-    const teamB = await createTeam(org.id, "Design", owner.id);
-    await addTeamMember(teamA.id, leadOfA.id, owner.id);
-    await setTeamLead(teamA.id, leadOfA.id, true, owner.id);
-
-    expect(await canCreateVoidForTeam(leadOfA.id, teamA.id)).toBe(true);
-    expect(await canCreateVoidForTeam(leadOfA.id, teamB.id)).toBe(false);
-  });
-
-  it("getVoidRole returns the highest role among a user's Team-derived grants when they belong to multiple Teams with grants on the same Void", async () => {
-    const owner = await createUser("owner5@example.com");
-    const person = await createUser("person5@example.com");
-    const org = await createOrganization(owner.id, "Acme");
-    await db
-      .insert(memberships)
-      .values({ organizationId: org.id, userId: person.id, role: "member" });
-    const teamA = await createTeam(org.id, "Engineering", owner.id);
-    const teamB = await createTeam(org.id, "Design", owner.id);
-    await addTeamMember(teamA.id, person.id, owner.id);
-    await addTeamMember(teamB.id, person.id, owner.id);
-
-    const result = await createVoid(org.id, "Shared Void", null, owner.id);
-    if (!result.ok) throw new Error("unreachable");
-
-    await grantVoidAccess(result.void.id, { teamId: teamA.id }, "viewer", owner.id);
-    await grantVoidAccess(result.void.id, { teamId: teamB.id }, "manager", owner.id);
-
-    expect(await getVoidRole(person.id, result.void.id)).toBe("manager");
+    // Creator gets a direct Manager grant on the child they made.
+    expect(await getVoidRole(creator.id, childResult.void.id)).toBe("manager");
+    // Nothing is inherited from the parent — a fellow parent member with no
+    // direct grant on the child has no access to it at all.
+    expect(await getVoidRole(parentMember.id, childResult.void.id)).toBeNull();
+    expect(await canEditVoid(parentMember.id, childResult.void.id)).toBe(false);
   });
 
   it("a deleted Void is authorization-inaccessible even to a Manager with an existing grant (architecture.md §6.2)", async () => {
     const owner = await createUser("owner6@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const result = await createVoid(org.id, "Doomed Void", null, owner.id);
+    const result = await createVoid(org.id, "Doomed Void", null, "private", owner.id);
     if (!result.ok) throw new Error("unreachable");
 
     expect(await canAccessVoid(owner.id, result.void.id)).toBe(true);
@@ -156,7 +119,7 @@ describe("Void authorization (architecture.md §3, corrected per C1)", () => {
       .insert(memberships)
       .values({ organizationId: org.id, userId: member.id, role: "member" });
 
-    const result = await createVoid(org.id, "Member's Void", null, member.id);
+    const result = await createVoid(org.id, "Member's Void", null, "private", member.id);
     if (!result.ok) throw new Error("unreachable");
 
     // Confirm the C1 baseline still holds: no content access for the Owner.
@@ -176,7 +139,7 @@ describe("Void authorization (architecture.md §3, corrected per C1)", () => {
       .insert(memberships)
       .values({ organizationId: org.id, userId: bystander.id, role: "member" });
 
-    const result = await createVoid(org.id, "Owner's Void", null, owner.id);
+    const result = await createVoid(org.id, "Owner's Void", null, "private", owner.id);
     if (!result.ok) throw new Error("unreachable");
 
     expect(await canDeleteVoid(bystander.id, result.void.id)).toBe(false);

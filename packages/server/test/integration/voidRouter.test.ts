@@ -63,10 +63,10 @@ describe("voidRouter & groupRouter (requireCapability wiring)", () => {
     ).resolves.toMatchObject({ name: "Owner's Void" });
   });
 
-  it("void.create with a teamId additionally requires canCreateVoidForTeam", async () => {
+  it('void.create with a parentVoidId (a "Team") additionally requires canCreateChildVoid', async () => {
     const { client: ownerClient } = await signupAndLogin("owner2@example.com");
     const org = await ownerClient.organization.create.mutate({ name: "Acme" });
-    const team = await ownerClient.team.create.mutate({
+    const parent = await ownerClient.void.create.mutate({
       organizationId: org.id,
       name: "Engineering",
     });
@@ -76,24 +76,24 @@ describe("voidRouter & groupRouter (requireCapability wiring)", () => {
       .insert(memberships)
       .values({ organizationId: org.id, userId: memberId, role: "member" });
 
-    // A plain member (not the Team Lead, not an org Admin/Owner) cannot
-    // create a Void for this Team.
+    // A plain member (no grant on the parent, not an org Admin/Owner) cannot
+    // create a child Void ("Team") under it.
     await expect(
       memberClient.void.create.mutate({
         organizationId: org.id,
         name: "Team Void",
-        teamId: team.id,
+        parentVoidId: parent.id,
       }),
     ).rejects.toThrow(TRPCClientError);
 
-    // The Owner can (canManageOrganization satisfies canCreateVoidForTeam).
+    // The Owner can (canManageOrganization satisfies canCreateChildVoid).
     await expect(
       ownerClient.void.create.mutate({
         organizationId: org.id,
         name: "Team Void",
-        teamId: team.id,
+        parentVoidId: parent.id,
       }),
-    ).resolves.toMatchObject({ name: "Team Void" });
+    ).resolves.toMatchObject({ name: "Team Void", parentVoidId: parent.id });
   });
 
   it("a Viewer-role grant permits void.get but not group.create (Editor+ required)", async () => {
@@ -249,7 +249,7 @@ describe("voidRouter & groupRouter (requireCapability wiring)", () => {
     });
   });
 
-  it("listEligibleMembers: unifies direct + Team-derived access, is searchable, and never leaks a user without access to this Void", async () => {
+  it("listEligibleMembers: lists directly-granted members, is searchable, and never leaks a user without access to this Void", async () => {
     const { client: ownerClient } = await signupAndLogin("owner8@example.com");
     const org = await ownerClient.organization.create.mutate({ name: "Acme" });
     const voidRow = await ownerClient.void.create.mutate({ organizationId: org.id, name: "Void" });
@@ -290,6 +290,102 @@ describe("voidRouter & groupRouter (requireCapability wiring)", () => {
     const { client: outsiderClient } = await signupAndLogin("outsider8@example.com");
     await expect(
       outsiderClient.void.listEligibleMembers.query({ voidId: voidRow.id }),
+    ).rejects.toThrow(TRPCClientError);
+  });
+
+  it('listChildren returns child Voids ("Teams") nested under a parent, respecting each child\'s own visibility', async () => {
+    const { client: ownerClient } = await signupAndLogin("owner9@example.com");
+    const org = await ownerClient.organization.create.mutate({ name: "Acme" });
+    const parent = await ownerClient.void.create.mutate({ organizationId: org.id, name: "Parent" });
+    const publicChild = await ownerClient.void.create.mutate({
+      organizationId: org.id,
+      name: "Public Child",
+      parentVoidId: parent.id,
+      visibility: "public",
+    });
+    await ownerClient.void.create.mutate({
+      organizationId: org.id,
+      name: "Invisible Child",
+      parentVoidId: parent.id,
+      visibility: "invisible",
+    });
+
+    const { client: memberClient, userId: memberId } = await signupAndLogin("member9@example.com");
+    await db
+      .insert(memberships)
+      .values({ organizationId: org.id, userId: memberId, role: "member" });
+    await ownerClient.void.grantAccess.mutate({
+      voidId: parent.id,
+      userId: memberId,
+      role: "viewer",
+    });
+
+    const children = await memberClient.void.listChildren.query({ voidId: parent.id });
+    expect(children.map((c) => c.id)).toEqual([publicChild.id]);
+  });
+
+  it("updateVisibility is Manager-gated, and the join-request lifecycle (request/list/accept with a chosen role) works end to end", async () => {
+    const { client: ownerClient } = await signupAndLogin("owner10@example.com");
+    const org = await ownerClient.organization.create.mutate({ name: "Acme" });
+    const voidRow = await ownerClient.void.create.mutate({
+      organizationId: org.id,
+      name: "Void",
+      visibility: "public",
+    });
+
+    const { client: requesterClient, userId: requesterId } =
+      await signupAndLogin("requester10@example.com");
+    await db
+      .insert(memberships)
+      .values({ organizationId: org.id, userId: requesterId, role: "member" });
+
+    // Not private yet (still public from creation) — no join request possible.
+    await expect(requesterClient.void.requestJoin.mutate({ voidId: voidRow.id })).rejects.toThrow(
+      TRPCClientError,
+    );
+
+    // A plain member cannot change visibility.
+    await expect(
+      requesterClient.void.updateVisibility.mutate({ voidId: voidRow.id, visibility: "private" }),
+    ).rejects.toThrow(TRPCClientError);
+    await ownerClient.void.updateVisibility.mutate({ voidId: voidRow.id, visibility: "private" });
+
+    await requesterClient.void.requestJoin.mutate({ voidId: voidRow.id });
+    // Duplicate pending request rejected.
+    await expect(requesterClient.void.requestJoin.mutate({ voidId: voidRow.id })).rejects.toThrow(
+      TRPCClientError,
+    );
+
+    const pending = await requesterClient.void.listMyJoinRequests.query();
+    expect(pending.map((r) => r.voidId)).toContain(voidRow.id);
+
+    const requests = await ownerClient.void.listJoinRequests.query({ voidId: voidRow.id });
+    expect(requests).toHaveLength(1);
+    const request = requests[0]!;
+    expect(request.userId).toBe(requesterId);
+
+    // Accepting without a role is rejected (the Manager must explicitly choose one).
+    await expect(
+      ownerClient.void.decideJoinRequest.mutate({ requestId: request.id, decision: "accepted" }),
+    ).rejects.toThrow(TRPCClientError);
+
+    await ownerClient.void.decideJoinRequest.mutate({
+      requestId: request.id,
+      decision: "accepted",
+      role: "editor",
+    });
+
+    const grants = await ownerClient.void.listAccessGrants.query({ voidId: voidRow.id });
+    const requesterGrant = grants.find((g) => g.userId === requesterId);
+    expect(requesterGrant?.role).toBe("editor");
+
+    // No more pending requests, and a second decide attempt is rejected.
+    await expect(
+      ownerClient.void.decideJoinRequest.mutate({
+        requestId: request.id,
+        decision: "accepted",
+        role: "viewer",
+      }),
     ).rejects.toThrow(TRPCClientError);
   });
 });

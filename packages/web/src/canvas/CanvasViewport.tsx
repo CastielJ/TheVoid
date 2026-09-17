@@ -20,11 +20,14 @@ import { GroupBox } from "./GroupBox";
 const WASD_SPEED_WORLD_PER_SEC = 700;
 const CAMERA_SAVE_DEBOUNCE_MS = 800;
 
-// Mirrors domains/group/groups.ts's server-side constants exactly — used
-// only to preview what the server WOULD compute if a dragged Task were
-// dropped into a given Group, never written anywhere itself.
+// Mirrors domains/group/groups.ts's server-side constants exactly (values
+// measured directly from the real rendered compact TaskCard, not guessed —
+// see that file's own comment) — used only to preview what the server
+// WOULD compute if a dragged Task were dropped into a given Group, never
+// written anywhere itself.
 const GROUP_PREVIEW_TASK_WIDTH = 220;
-const GROUP_PREVIEW_TASK_HEIGHT = 96;
+const GROUP_PREVIEW_TASK_HEIGHT_BASE = 76;
+const GROUP_PREVIEW_TASK_HEIGHT_WITH_BADGES = 100;
 const GROUP_PREVIEW_PADDING = 24;
 const GROUP_PREVIEW_MIN_WIDTH = 280;
 const GROUP_PREVIEW_MIN_HEIGHT = 160;
@@ -429,6 +432,17 @@ export function CanvasViewport({
     if (!draggingTaskId) return null;
     const draggingTask = tasks.get(draggingTaskId);
     if (!draggingTask) return null;
+    // Mirrors domains/task/taskContentFlags.ts's "has badges" definition
+    // exactly: checklist/comment/tag/assignee count > 0 (a due date never
+    // adds height — CompactBody renders it in the same row as status).
+    const hasBadges = (taskId: string) => {
+      const s = summaryByTaskId.get(taskId);
+      return Boolean(
+        s && (s.checklistCount > 0 || s.commentCount > 0 || s.tagCount > 0 || s.assigneeCount > 0),
+      );
+    };
+    const heightFor = (taskId: string) =>
+      hasBadges(taskId) ? GROUP_PREVIEW_TASK_HEIGHT_WITH_BADGES : GROUP_PREVIEW_TASK_HEIGHT_BASE;
     for (const g of groups.values()) {
       const withinX = draggingTask.x >= g.x && draggingTask.x <= g.x + g.width;
       const withinY = draggingTask.y >= g.y && draggingTask.y <= g.y + g.height;
@@ -436,13 +450,13 @@ export function CanvasViewport({
 
       const positions = [...tasks.values()]
         .filter((t) => t.groupId === g.id && t.id !== draggingTaskId)
-        .map((t) => ({ x: t.x, y: t.y }));
-      positions.push({ x: draggingTask.x, y: draggingTask.y });
+        .map((t) => ({ id: t.id, x: t.x, y: t.y }));
+      positions.push({ id: draggingTaskId, x: draggingTask.x, y: draggingTask.y });
 
       const minX = Math.min(...positions.map((p) => p.x));
       const minY = Math.min(...positions.map((p) => p.y));
       const maxX = Math.max(...positions.map((p) => p.x + GROUP_PREVIEW_TASK_WIDTH));
-      const maxY = Math.max(...positions.map((p) => p.y + GROUP_PREVIEW_TASK_HEIGHT));
+      const maxY = Math.max(...positions.map((p) => p.y + heightFor(p.id)));
       return {
         groupId: g.id,
         bounds: {
@@ -454,7 +468,7 @@ export function CanvasViewport({
       };
     }
     return null;
-  }, [draggingTaskId, tasks, groups]);
+  }, [draggingTaskId, tasks, groups, summaryByTaskId]);
 
   function handleBackgroundDoubleClick(e: React.MouseEvent) {
     // Second feature pass: GroupBox no longer consumes its own double-click

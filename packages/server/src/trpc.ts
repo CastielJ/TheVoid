@@ -47,8 +47,8 @@ type CapabilityCheck = (userId: string, targetId: string) => Promise<boolean>;
  * implementation-plan.md §4: wraps a capability function from
  * `authorization/capabilities.ts` so procedures never inline a permission
  * check. Chain it onto a `protectedProcedure` after `.input()`, e.g.
- * `protectedProcedure.input(schema).use(requireCapability(canManageTeam,
- * (input) => input.teamId))` — `getTargetId` reads the relevant ID out of
+ * `protectedProcedure.input(schema).use(requireCapability(canManageVoidAccess,
+ * (input) => input.voidId))` — `getTargetId` reads the relevant ID out of
  * the already-validated input.
  */
 export function requireCapability<TInput>(

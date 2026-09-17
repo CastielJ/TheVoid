@@ -34,7 +34,7 @@ describe("ChecklistItem & Comment domains (implementation-plan.md Phase 4)", () 
   it("addChecklistItem assigns sequential positions; toggleChecklistItem flips isComplete", async () => {
     const owner = await createUser("owner@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
     const task = await createTask({ voidId: voidResult.void.id, title: "T", x: 0, y: 0 }, owner.id);
     if (!task.ok) throw new Error("unreachable");
@@ -62,10 +62,10 @@ describe("ChecklistItem & Comment domains (implementation-plan.md Phase 4)", () 
       { organizationId: org.id, userId: author.id, role: "member" },
       { organizationId: org.id, userId: bystander.id, role: "member" },
     ]);
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
-    await grantVoidAccess(voidResult.void.id, { userId: author.id }, "editor", owner.id);
-    await grantVoidAccess(voidResult.void.id, { userId: bystander.id }, "editor", owner.id);
+    await grantVoidAccess(voidResult.void.id, author.id, "editor", owner.id);
+    await grantVoidAccess(voidResult.void.id, bystander.id, "editor", owner.id);
     const task = await createTask({ voidId: voidResult.void.id, title: "T", x: 0, y: 0 }, owner.id);
     if (!task.ok) throw new Error("unreachable");
 
@@ -87,9 +87,9 @@ describe("ChecklistItem & Comment domains (implementation-plan.md Phase 4)", () 
     await db
       .insert(memberships)
       .values({ organizationId: org.id, userId: author.id, role: "member" });
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
-    await grantVoidAccess(voidResult.void.id, { userId: author.id }, "editor", owner.id);
+    await grantVoidAccess(voidResult.void.id, author.id, "editor", owner.id);
     const task = await createTask({ voidId: voidResult.void.id, title: "T", x: 0, y: 0 }, owner.id);
     if (!task.ok) throw new Error("unreachable");
 

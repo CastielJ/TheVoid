@@ -1,9 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { voidAccessGrants, teamMemberships, type VoidAccessGrantRole } from "../db/schema.js";
+import { voidAccessGrants, type VoidAccessGrantRole } from "../db/schema.js";
 import { getActiveMembership } from "../domains/organization/memberships.js";
-import { findTeamById } from "../domains/team/teams.js";
-import { getTeamMembership } from "../domains/team/teamMemberships.js";
 import { findVoidById } from "../domains/void/voids.js";
 import { findVoidAccessGrantById } from "../domains/void/voidAccessGrants.js";
 import { findGroupById } from "../domains/group/groups.js";
@@ -64,32 +62,16 @@ export async function canTransferOwnership(
   return membership?.role === "owner";
 }
 
-export async function canManageTeam(userId: string, teamId: string): Promise<boolean> {
-  const team = await findTeamById(teamId);
-  if (!team) return false;
-  if (await canManageOrganization(userId, team.organizationId)) return true;
-  const teamMembership = await getTeamMembership(userId, teamId);
-  return teamMembership?.isTeamLead === true;
-}
-
-/**
- * Same rule as canManageTeam (architecture.md §3: "Team Lead (own Team) or
- * org Admin/Owner"). Kept as its own named capability — it gates a
- * conceptually different action (Void creation, Phase 3) — even though the
- * logic currently coincides with canManageTeam.
- */
-export async function canCreateVoidForTeam(userId: string, teamId: string): Promise<boolean> {
-  return canManageTeam(userId, teamId);
-}
-
 // --- Void-scoped capabilities (architecture.md §3, corrected per C1) --------
 // Fully real as of Phase 3. Resolution order for getVoidRole (architecture.md
-// §3): (1) a direct VoidAccessGrant on this user wins outright; (2) else the
-// highest role among this user's Team-derived grants; (3) else no access —
-// regardless of Organization role. A deleted Void is unconditionally
+// §3): (1) a direct VoidAccessGrant on this user wins outright; (2) else no
+// access — regardless of Organization role. A deleted Void is unconditionally
 // inaccessible (architecture.md §6.2), checked before any grant lookup.
-
-const voidRoleRank: Record<VoidAccessGrantRole, number> = { viewer: 1, editor: 2, manager: 3 };
+//
+// Third feature pass: the old Team-derived-grant branch is gone — Team
+// merged into Void (a self-referencing hierarchy, see db/schema.ts), so a
+// "Team member" is now just a plain per-user VoidAccessGrant on that child
+// Void. There is no longer a separate grant type to resolve through a join.
 
 export async function getVoidRole(
   userId: string,
@@ -101,10 +83,9 @@ export async function getVoidRole(
   // Phase 4 addendum (docs/decisions.md): a User who no longer has an
   // active Membership in the Void's Organization has no access at all,
   // regardless of any VoidAccessGrant row — member removal (D17) only
-  // explicitly ends Membership/TeamMembership, never touches
-  // VoidAccessGrant rows, so without this check a removed member's old
-  // *direct* grant (not Team-derived, so nothing about ending Team
-  // membership would touch it) would silently keep working forever.
+  // explicitly ends Membership, never touches VoidAccessGrant rows, so
+  // without this check a removed member's old grant would silently keep
+  // working forever.
   const membership = await getActiveMembership(userId, voidRow.organizationId);
   if (!membership) return null;
 
@@ -113,19 +94,20 @@ export async function getVoidRole(
     .from(voidAccessGrants)
     .where(and(eq(voidAccessGrants.voidId, voidId), eq(voidAccessGrants.userId, userId)))
     .limit(1);
-  if (direct) return direct.role;
+  return direct?.role ?? null;
+}
 
-  const teamGrants = await db
-    .select({ role: voidAccessGrants.role })
-    .from(voidAccessGrants)
-    .innerJoin(teamMemberships, eq(teamMemberships.teamId, voidAccessGrants.teamId))
-    .where(and(eq(voidAccessGrants.voidId, voidId), eq(teamMemberships.userId, userId)));
-  if (teamGrants.length === 0) return null;
-
-  return teamGrants.reduce<VoidAccessGrantRole>(
-    (best, g) => (voidRoleRank[g.role] > voidRoleRank[best] ? g.role : best),
-    teamGrants[0]!.role,
-  );
+/**
+ * Third feature pass — who may create a child Void ("Team") under a given
+ * parent Void: a Manager on the parent, or an Org Admin/Owner. Natural
+ * successor to the old "Team Lead or Org Admin creates Voids under a Team"
+ * rule, now that a Team is just a child Void.
+ */
+export async function canCreateChildVoid(userId: string, parentVoidId: string): Promise<boolean> {
+  const parent = await findVoidById(parentVoidId);
+  if (!parent || parent.deletedAt) return false;
+  if (await canManageOrganization(userId, parent.organizationId)) return true;
+  return canManageVoidAccess(userId, parentVoidId);
 }
 
 export async function canAccessVoid(userId: string, voidId: string): Promise<boolean> {

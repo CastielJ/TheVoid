@@ -48,13 +48,25 @@ export const TaskCard = memo(function TaskCard({
   const isSelected = useCanvasStore((s) => s.isSelected("task", task.id));
   const isExpanded = useCanvasStore((s) => s.isExpanded(task.id));
   const toggleExpanded = useCanvasStore((s) => s.toggleExpanded);
+  // Third feature pass: Save/Discard on the expanded card's core fields
+  // (description/status/priority/due date/tags). ExpandedBody owns the
+  // actual draft state and reports dirtiness up here so the × button (the
+  // only real collapse path — see TaskCard.tsx's own history) can gate on
+  // it: collapsing while dirty shows an inline "unsaved changes" warning
+  // instead of silently discarding the draft.
+  const [isDirty, setIsDirty] = useState(false);
+  const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
+  function collapse() {
+    setShowUnsavedWarning(false);
+    setIsDirty(false);
+    toggleExpanded(task.id);
+  }
   const select = useCanvasStore((s) => s.select);
   const setLocalPosition = useCanvasStore((s) => s.setLocalPosition);
   const setDraggingTaskId = useCanvasStore((s) => s.setDraggingTaskId);
   const applyTask = useCanvasStore((s) => s.applyTask);
   const removeTask = useCanvasStore((s) => s.removeTask);
   const voidId = useCanvasStore((s) => s.voidId);
-  const utils = trpc.useUtils();
 
   const move = trpc.task.move.useMutation({ onSuccess: (updated) => applyTask(updated) });
   const update = trpc.task.update.useMutation({ onSuccess: (updated) => applyTask(updated) });
@@ -154,7 +166,10 @@ export const TaskCard = memo(function TaskCard({
         onDragPointerDown={isExpanded ? handlePointerDown : undefined}
         onDragPointerMove={isExpanded ? handlePointerMove : undefined}
         onDragPointerUp={isExpanded ? handlePointerUp : undefined}
-        onCollapse={() => toggleExpanded(task.id)}
+        onCollapse={() => {
+          if (isDirty) setShowUnsavedWarning(true);
+          else collapse();
+        }}
         onCommitTitle={(title) => update.mutate({ taskId: task.id, title })}
       />
 
@@ -167,10 +182,10 @@ export const TaskCard = memo(function TaskCard({
           update={update}
           onDelete={() => deleteTask.mutate({ taskId: task.id })}
           onDuplicate={() => duplicateTask.mutate({ taskId: task.id })}
-          onSetTagNames={(tagNames) => {
-            update.mutate({ taskId: task.id, tagNames });
-            utils.task.listSummaries.invalidate({ voidId });
-          }}
+          onDirtyChange={setIsDirty}
+          showUnsavedWarning={showUnsavedWarning}
+          onDismissWarning={() => setShowUnsavedWarning(false)}
+          onCollapse={collapse}
         />
       )}
     </div>
@@ -331,47 +346,156 @@ function CompactBody({ task, summary }: { task: Task; summary: TaskSummary | und
   );
 }
 
+interface TaskDraft {
+  description: string;
+  status: Task["status"];
+  priority: Task["priority"];
+  dueDate: Task["dueDate"];
+  tagNames: string[];
+}
+
+function draftFromTask(task: Task): Omit<TaskDraft, "tagNames"> {
+  return {
+    description: task.description ?? "",
+    status: task.status,
+    priority: task.priority,
+    dueDate: task.dueDate,
+  };
+}
+
 function ExpandedBody({
   task,
   voidId,
   update,
   onDelete,
   onDuplicate,
-  onSetTagNames,
+  onDirtyChange,
+  showUnsavedWarning,
+  onDismissWarning,
+  onCollapse,
 }: {
   task: Task;
   voidId: string;
   update: ReturnType<typeof trpc.task.update.useMutation>;
   onDelete: () => void;
   onDuplicate: () => void;
-  onSetTagNames: (tagNames: string[]) => void;
+  onDirtyChange: (dirty: boolean) => void;
+  showUnsavedWarning: boolean;
+  onDismissWarning: () => void;
+  onCollapse: () => void;
 }) {
   const taskId = task.id;
   const utils = trpc.useUtils();
-  const [description, setDescription] = useState(task.description ?? "");
-  useEffect(() => setDescription(task.description ?? ""), [task.id, task.description]);
+
+  const tags = trpc.task.listTags.useQuery({ taskId });
+
+  // Third feature pass — description/status/priority/due date/tags no
+  // longer autosave per-field; they're a local draft, only persisted on
+  // explicit Save. `baseline` (a ref, not state — it must not itself
+  // trigger a re-render) holds what the draft is compared against for
+  // dirty-detection. TaskCard is rendered with `key={task.id}` by its
+  // parent (CanvasViewport), so React always mounts a fresh instance per
+  // Task — there is no "task.id changes under an existing instance" case to
+  // handle separately from ordinary mount-time initialization.
+  //
+  // Once mounted, the draft resyncs from incoming `task`/tag prop changes
+  // (realtime updates from another user, or this user's own successful
+  // Save) ONLY while NOT dirty — the moment the user starts actually
+  // diverging from the server value, further incoming updates stop
+  // overwriting their in-progress edit until they Save or Discard (a
+  // pre-existing last-write-wins risk on Save itself, just with a wider
+  // window now that edits batch instead of firing per-blur, same as noted
+  // in the plan this shipped from).
+  const [draft, setDraft] = useState<TaskDraft>({ ...draftFromTask(task), tagNames: [] });
+  const baseline = useRef<TaskDraft>(draft);
+
+  const isDirty =
+    draft.description !== baseline.current.description ||
+    draft.status !== baseline.current.status ||
+    draft.priority !== baseline.current.priority ||
+    draft.dueDate !== baseline.current.dueDate ||
+    draft.tagNames.length !== baseline.current.tagNames.length ||
+    draft.tagNames.some((t, i) => t !== baseline.current.tagNames[i]);
+
+  useEffect(() => onDirtyChange(isDirty), [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (isDirty) return;
+    const next = { ...draftFromTask(task), tagNames: baseline.current.tagNames };
+    baseline.current = next;
+    setDraft(next);
+    // isDirty deliberately excluded — this effect's own job is to decide
+    // whether it's safe to resync, not to re-fire every time dirtiness
+    // itself flips (that would resync the instant a Discard makes it clean
+    // again, which the discard() function already handles directly).
+  }, [task.description, task.status, task.priority, task.dueDate]);
+
+  useEffect(() => {
+    if (isDirty || !tags.data) return;
+    const tagNames = tags.data.map((t) => t.name);
+    baseline.current = { ...baseline.current, tagNames };
+    setDraft((d) => ({ ...d, tagNames }));
+  }, [tags.data]);
+
+  function save() {
+    update.mutate({
+      taskId,
+      description: draft.description || null,
+      status: draft.status,
+      priority: draft.priority,
+      dueDate: draft.dueDate || null,
+      tagNames: draft.tagNames,
+    });
+    utils.task.listSummaries.invalidate({ voidId });
+    baseline.current = draft;
+    onDirtyChange(false);
+  }
+
+  function discard() {
+    setDraft(baseline.current);
+  }
 
   const assignees = trpc.task.listAssignees.useQuery({ taskId });
-  const tags = trpc.task.listTags.useQuery({ taskId });
   const members = trpc.void.listEligibleMembers.useQuery({ voidId });
   const memberByUserId = new Map((members.data ?? []).map((m) => [m.userId, m]));
 
+  // Every mutation here that changes a count the compact card's badges show
+  // (assignees/checklist/comments — tags already does this via
+  // onSetTagNames in the parent) must also invalidate task.listSummaries,
+  // not just its own full-content query — otherwise the compact card's
+  // badge counts (and the Group auto-sizing math that assumes them) go
+  // stale the instant you collapse back out of an edit.
   const assign = trpc.task.assign.useMutation({
-    onSuccess: () => utils.task.listAssignees.invalidate({ taskId }),
+    onSuccess: () => {
+      utils.task.listAssignees.invalidate({ taskId });
+      utils.task.listSummaries.invalidate({ voidId });
+    },
   });
   const unassign = trpc.task.unassign.useMutation({
-    onSuccess: () => utils.task.listAssignees.invalidate({ taskId }),
+    onSuccess: () => {
+      utils.task.listAssignees.invalidate({ taskId });
+      utils.task.listSummaries.invalidate({ voidId });
+    },
   });
 
   const checklist = trpc.task.listChecklistItems.useQuery({ taskId });
   const addChecklistItem = trpc.task.addChecklistItem.useMutation({
-    onSuccess: () => utils.task.listChecklistItems.invalidate({ taskId }),
+    onSuccess: () => {
+      utils.task.listChecklistItems.invalidate({ taskId });
+      utils.task.listSummaries.invalidate({ voidId });
+    },
   });
   const toggleChecklistItem = trpc.task.toggleChecklistItem.useMutation({
-    onSuccess: () => utils.task.listChecklistItems.invalidate({ taskId }),
+    onSuccess: () => {
+      utils.task.listChecklistItems.invalidate({ taskId });
+      utils.task.listSummaries.invalidate({ voidId });
+    },
   });
   const deleteChecklistItem = trpc.task.deleteChecklistItem.useMutation({
-    onSuccess: () => utils.task.listChecklistItems.invalidate({ taskId }),
+    onSuccess: () => {
+      utils.task.listChecklistItems.invalidate({ taskId });
+      utils.task.listSummaries.invalidate({ voidId });
+    },
   });
   const [newChecklistLabel, setNewChecklistLabel] = useState("");
 
@@ -379,6 +503,7 @@ function ExpandedBody({
   const addComment = trpc.task.addComment.useMutation({
     onSuccess: () => {
       setNewComment("");
+      utils.task.listSummaries.invalidate({ voidId });
       return utils.task.listComments.invalidate({ taskId });
     },
   });
@@ -399,15 +524,59 @@ function ExpandedBody({
         cursor: "default",
       }}
     >
+      {showUnsavedWarning && (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "8px 10px",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--color-danger)",
+            color: "#fff",
+            fontSize: 12,
+          }}
+        >
+          <span>You have unsaved changes.</span>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <Button
+              variant="secondary"
+              style={{ padding: "2px 8px", fontSize: 12 }}
+              onClick={() => {
+                save();
+                onCollapse();
+              }}
+            >
+              Save &amp; close
+            </Button>
+            <Button
+              variant="secondary"
+              style={{ padding: "2px 8px", fontSize: 12 }}
+              onClick={() => {
+                discard();
+                onCollapse();
+              }}
+            >
+              Discard &amp; close
+            </Button>
+            <Button
+              variant="ghost"
+              style={{ padding: "2px 8px", fontSize: 12, color: "#fff" }}
+              onClick={onDismissWarning}
+            >
+              Keep editing
+            </Button>
+          </div>
+        </div>
+      )}
+
       <textarea
         aria-label="Description"
-        value={description}
+        value={draft.description}
         placeholder="Description…"
-        onChange={(e) => setDescription(e.target.value)}
-        onBlur={() =>
-          description !== (task.description ?? "") &&
-          update.mutate({ taskId, description: description || null })
-        }
+        onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
         rows={2}
         style={{ ...fieldStyle, resize: "vertical" }}
       />
@@ -416,9 +585,9 @@ function ExpandedBody({
         <Field label="Status">
           <select
             aria-label="Status"
-            value={task.status}
+            value={draft.status}
             onChange={(e) =>
-              update.mutate({ taskId, status: e.target.value as (typeof STATUS_OPTIONS)[number] })
+              setDraft((d) => ({ ...d, status: e.target.value as (typeof STATUS_OPTIONS)[number] }))
             }
             style={fieldStyle}
           >
@@ -432,12 +601,12 @@ function ExpandedBody({
         <Field label="Priority">
           <select
             aria-label="Priority"
-            value={task.priority ?? ""}
+            value={draft.priority ?? ""}
             onChange={(e) =>
-              update.mutate({
-                taskId,
+              setDraft((d) => ({
+                ...d,
                 priority: (e.target.value || null) as (typeof taskPriorityValues)[number] | null,
-              })
+              }))
             }
             style={fieldStyle}
           >
@@ -455,8 +624,8 @@ function ExpandedBody({
         <input
           aria-label="Due date"
           type="date"
-          value={task.dueDate ?? ""}
-          onChange={(e) => update.mutate({ taskId, dueDate: e.target.value || null })}
+          value={draft.dueDate ?? ""}
+          onChange={(e) => setDraft((d) => ({ ...d, dueDate: e.target.value || null }))}
           style={fieldStyle}
         />
       </Field>
@@ -464,10 +633,19 @@ function ExpandedBody({
       <Field label="Tags">
         <TagPicker
           voidId={voidId}
-          selected={(tags.data ?? []).map((t) => t.name)}
-          onChange={onSetTagNames}
+          selected={draft.tagNames}
+          onChange={(tagNames) => setDraft((d) => ({ ...d, tagNames }))}
         />
       </Field>
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <Button onClick={save} disabled={!isDirty || update.isPending} loading={update.isPending}>
+          Save
+        </Button>
+        <Button variant="secondary" onClick={discard} disabled={!isDirty}>
+          Discard
+        </Button>
+      </div>
 
       <section>
         <SectionTitle>Assignees</SectionTitle>

@@ -37,7 +37,7 @@ describe("Task assignment: C8 eligibility & D17 interaction", () => {
     const owner = await createUser("owner@example.com");
     const outsider = await createUser("outsider@example.com");
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
     const task = await createTask({ voidId: voidResult.void.id, title: "T", x: 0, y: 0 }, owner.id);
     if (!task.ok) throw new Error("unreachable");
@@ -54,9 +54,9 @@ describe("Task assignment: C8 eligibility & D17 interaction", () => {
     await db
       .insert(memberships)
       .values({ organizationId: org.id, userId: person.id, role: "member" });
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
-    await grantVoidAccess(voidResult.void.id, { userId: person.id }, "editor", owner.id);
+    await grantVoidAccess(voidResult.void.id, person.id, "editor", owner.id);
     const task = await createTask({ voidId: voidResult.void.id, title: "T", x: 0, y: 0 }, owner.id);
     if (!task.ok) throw new Error("unreachable");
 
@@ -81,9 +81,9 @@ describe("Task assignment: C8 eligibility & D17 interaction", () => {
     await db
       .insert(memberships)
       .values({ organizationId: org.id, userId: person.id, role: "member" });
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
-    await grantVoidAccess(voidResult.void.id, { userId: person.id }, "editor", owner.id);
+    await grantVoidAccess(voidResult.void.id, person.id, "editor", owner.id);
     const task = await createTask({ voidId: voidResult.void.id, title: "T", x: 0, y: 0 }, owner.id);
     if (!task.ok) throw new Error("unreachable");
 
@@ -100,11 +100,11 @@ describe("Task assignment: C8 eligibility & D17 interaction", () => {
     await db
       .insert(memberships)
       .values({ organizationId: org.id, userId: member.id, role: "member" });
-    const voidA = await createVoid(org.id, "Void A", null, owner.id);
-    const voidB = await createVoid(org.id, "Void B", null, owner.id);
+    const voidA = await createVoid(org.id, "Void A", null, "private", owner.id);
+    const voidB = await createVoid(org.id, "Void B", null, "private", owner.id);
     if (!voidA.ok || !voidB.ok) throw new Error("unreachable");
-    await grantVoidAccess(voidA.void.id, { userId: member.id }, "editor", owner.id);
-    await grantVoidAccess(voidB.void.id, { userId: member.id }, "editor", owner.id);
+    await grantVoidAccess(voidA.void.id, member.id, "editor", owner.id);
+    await grantVoidAccess(voidB.void.id, member.id, "editor", owner.id);
     const taskA = await createTask({ voidId: voidA.void.id, title: "TA", x: 0, y: 0 }, owner.id);
     const taskB = await createTask({ voidId: voidB.void.id, title: "TB", x: 0, y: 0 }, owner.id);
     if (!taskA.ok || !taskB.ok) throw new Error("unreachable");
@@ -147,9 +147,9 @@ describe("Task assignment: C8 eligibility & D17 interaction", () => {
     await db
       .insert(memberships)
       .values({ organizationId: org.id, userId: member.id, role: "member" });
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
-    await grantVoidAccess(voidResult.void.id, { userId: member.id }, "editor", owner.id);
+    await grantVoidAccess(voidResult.void.id, member.id, "editor", owner.id);
 
     expect(await canAccessVoid(member.id, voidResult.void.id)).toBe(true);
 

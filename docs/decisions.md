@@ -2096,6 +2096,171 @@ preview, card expand/collapse and the done-toggle, the left panel's theme
 toggle/recent-Voids/Teams-tree, and the full join-request flow) confirmed
 via Playwright-driven screenshots at desktop width.
 
+## Third Feature Pass — Team Merged Into Void, Group Sizing Fix, Task Save/Discard (2026-09-17)
+
+A third pass, triggered by two reports from further real use: a Group's
+dashed box not reliably containing its member Task cards (a visual
+overflow bug), and a request to add explicit Save/Discard buttons to task
+editing instead of pure per-field autosave. During scoping, the user
+clarified that the real underlying model they wanted was different from
+what the second pass had built: **"a team is a sub-void of a void... imagine
+it as a subdirectory"** — Teams and Voids should not be sibling top-level
+entities connected by grants, but a strict hierarchy where a Team is
+itself just another Void, nested under its parent, with its own canvas.
+This is the larger of the three changes in this pass and is covered first.
+
+**Q1. Team is fully merged into Void via a self-referencing hierarchy —
+the separate `teams`/`team_memberships`/`team_join_requests` tables are
+gone.** `voids` gains `parentVoidId` (nullable, self-referencing FK,
+`onDelete: cascade`) and `visibility` (the same public/private/invisible
+enum the second pass put on `teams`, now renamed `voidVisibilityValues`
+and living on Void instead). A "Team" is a Void row with `parentVoidId`
+set — nothing more. Nesting depth is unlimited by the schema (confirmed
+explicitly with the user: build the tree genuinely recursive rather than
+hard-coding one level, even though the product's own language mostly says
+"Void → Team"). "Team Lead" collapses into `voidAccessGrants.role =
+'manager'` on that specific child Void — no separate lead flag. Every
+`voidAccessGrants` row is now a plain per-user grant (the `teamId` variant
+and its CHECK constraint are gone); the second pass's "shared Voids across
+multiple Teams" feature (one Void granted to several Teams via the
+`teamId` grant variant) is dropped entirely per direct confirmation — it
+doesn't have a coherent meaning once a Team is just a Void with exactly
+one parent. `teamJoinRequests` is renamed `voidJoinRequests` and repointed
+at `voidId`; the deciding Manager now explicitly **picks** the granted
+role (viewer/editor/manager) at accept time rather than a fixed default —
+also confirmed explicitly, not assumed.
+
+Migration landed as six small, purely additive-or-purely-destructive
+steps in sequence (never add-and-remove in the same file), specifically to
+avoid `drizzle-kit generate`'s interactive rename-ambiguity prompt (which
+cannot be answered in a non-TTY environment): add `parentVoidId`/
+`visibility` to `voids` → drop `voids.teamId` → drop
+`voidAccessGrants.teamId` (with a one-line `DELETE` for any team-only
+grant row first, so the new `userId NOT NULL` constraint can apply) → drop
+the three old Team tables → create `voidJoinRequests` → a final custom
+migration rewriting existing `notifications.type` values
+(`team_join_*` → `void_join_*`, a plain data `UPDATE` since `type` is a
+`text` column with an app-level enum, not a native Postgres enum — no
+`ALTER TYPE` needed). Confirmed safe to run against production: Teams
+never held any Task/Group data under the old model (they were purely an
+access/grouping construct), so this loses only Team metadata (names,
+membership, visibility, pending requests) — no Task, Group, or Void row is
+touched.
+
+**Q2. A real design gap found and fixed during implementation: private
+top-level Voids had no discovery path.** The second pass's Team
+visibility model let any Org member browse a private-but-undiscovered
+Team via a flat, org-wide `team.list` and request to join it. Once Team
+became a nested child Void, the natural first implementation only applied
+that "visible even without a grant, unless invisible" discovery rule to
+`listChildVoids` (children of a Void you already have access to) — a
+private top-level Void had no equivalent, since the pre-existing
+`listAccessibleVoids`/`listTopLevelAccessibleVoids` only ever returned
+Voids the caller already held a grant on. Caught while rewriting the E2E
+critical-path test: the stranger user had no way to even see "Engineering"
+in their left-panel tree to request joining it. Fixed by giving
+`listTopLevelAccessibleVoids` the identical discovery rule
+`listChildVoids` already had (treating the Organization root as just
+another "parent" a Void can be visible-under), with a shared
+`withMembership` helper and a new `isMember` flag on every returned row so
+the UI can tell "I can open this" from "I can see this exists and request
+to join." `OrgDashboardPage`'s Voids grid filters to `isMember` only (it's
+a quick-access shortcut to Voids you're already in); the left panel's
+`VoidTree` is the one place discovery/join-request happens, at every
+nesting level uniformly. Deliberately consistent with a real filesystem:
+seeing something listed doesn't mean you can browse into its own
+children yet (`VoidTree` only fires `listChildren` — itself gated by
+`canAccessVoid` server-side — for a node the caller `isMember` of).
+
+**Q3. Who may create a child Void ("Team") under a parent: Manager on the
+parent, or Org Admin/Owner** (`canCreateChildVoid`) — the natural successor
+to the second pass's "Team Lead or Org Admin creates Voids for a Team"
+rule. General Void management (`canManageVoidAccess`, gating rename/
+visibility/grants) deliberately does **not** get an Org-Admin bypass here,
+even though the old Team-management rule had one — Void access has always
+excluded an automatic Org-Admin bypass by design (C1, "Org Admin/Owner
+never automatically bypass Void access"), and merging Team into Void means
+Team management now inherits Void's stricter rule rather than carrying
+its own looser one forward. `canManageTeam`/`canCreateVoidForTeam` are
+deleted outright, not deprecated — `getVoidRole`'s old Team-derived-grant
+branch (a join through `teamMemberships`) is gone too, since a Team
+member is now just a direct per-user grant.
+
+**Q4. Group auto-sizing bug — root cause was a flat height guess, not
+content-awareness.** The second pass's `TASK_BBOX_HEIGHT = 96` was a
+single guessed number for every compact Task card regardless of content.
+Direct measurement in a running browser (not another guess) found the real
+compact card has exactly two height states: 71px with no count badges,
+94px with any (checklist/comment/tag/assignee count > 0) — a due date
+never adds height, since `CompactBody` renders it in the same flex row as
+the status text, not a new row. The old 96px guess happened to sit just
+2px above the worst real case (94px), which is uncomfortably tight against
+ordinary font-rendering/anti-aliasing variance across environments — the
+likely actual mechanism behind the visual overflow report. Fixed with a
+genuinely content-aware formula instead of a bigger flat guess:
+`recomputeGroupBounds` now looks up which member Tasks actually have
+badges (new `domains/task/taskContentFlags.ts`'s `listTaskIdsWithBadges`,
+four small indexed `EXISTS`-shaped lookups scoped to just that Group's
+member Task ids) and uses `TASK_BBOX_HEIGHT_BASE = 76` or
+`TASK_BBOX_HEIGHT_WITH_BADGES = 100` per Task accordingly (both include a
+small safety margin over the measured 71/94, same reasoning as the old
+96's margin — just correctly split per-state instead of flattened into
+one number). `CanvasViewport.tsx`'s client-side drag-preview mirrors the
+same two-state formula, keyed off the already-loaded `task.listSummaries`
+batched query rather than a second fetch.
+
+**A second, unrelated bug found incidentally while measuring card
+heights:** the compact card's badge counts (checklist/comment/tag/
+assignee) were going stale after editing, because `assign`/`unassign`/
+`addChecklistItem`/`toggleChecklistItem`/`deleteChecklistItem`/
+`addComment` only ever invalidated their own full-content query
+(`task.listAssignees`, `task.listChecklistItems`, `task.listComments`),
+never the separate `task.listSummaries` query the compact card's badges
+actually read from — only the tag picker's `onChange` handler happened to
+invalidate both. Fixed by adding the missing `task.listSummaries`
+invalidation to every one of those mutations. Directly relevant to Q4:
+without this fix, a newly-added checklist item wouldn't show up as a
+badge (or count toward a Group's height) until something unrelated
+happened to refetch summaries.
+
+**Q5. Save/Discard is scoped to the five core editable fields
+(description, status, priority, due date, tags) — not the whole card.**
+Checklist/comments/assignees/title/the done-toggle remain immediate
+autosave, unchanged: adding a checklist item, posting a comment, or
+assigning someone are "add/remove a list item" actions users expect to
+take effect right away, not "edit a field's value" the way the five
+Save/Discard fields are. Implementation: a local `draft` object in
+`ExpandedBody`, compared against a `baseline` ref for dirty-detection.
+`TaskCard` is rendered `key={task.id}` by its parent, so a fresh component
+instance mounts per Task — there is no "task.id changes under an existing
+instance" case to special-case. While **not** dirty, the draft resyncs
+from incoming `task`/tag prop changes (a realtime update from another
+user, or this user's own successful Save) automatically; the moment the
+user starts actually diverging, further incoming updates stop overwriting
+their in-progress edit until they explicitly Save or Discard — this both
+prevents a genuinely-idle expanded card from showing stale data forever,
+and avoids clobbering an active edit out from under the user, in the two
+situations where each behavior is actually correct. Collapsing (the ×
+button — confirmed the only real collapse path; a card's own click-to-
+expand pointer handlers are detached while expanded, and no other
+`toggleExpanded` call site in the codebase can collapse an already-open
+card) while dirty does not silently discard: it shows an inline banner
+("Save & close" / "Discard & close" / "Keep editing") instead of
+collapsing, verified directly in a running browser.
+
+**Verification:** all 154 server tests passing (13 new: the Void-hierarchy/
+visibility/discovery domain tests including the new
+`isMember`-at-the-root coverage, the `canCreateChildVoid` capability
+tests replacing the deleted Team ones, the join-request-with-chosen-role
+router test, and the content-aware Group-height regression test), full
+workspace `typecheck`/`lint`/`format:check` clean, the Playwright
+critical-path E2E test rewritten for the wizard-based Void/Team creation
+flow and the new root-level discovery-and-join-request path (passing
+end-to-end), and a direct browser-driven verification of the Save/Discard
+banner sequence (dirty → collapse blocked → Keep editing → Discard →
+clean collapse) via Playwright, confirming each step's actual DOM state
+rather than just that no error was thrown.
+
 ## Approved assumptions (not separately interviewed, confirmed by user at documentation handoff)
 
 - **A1.** A Team Lead who creates a Void associated with their own Team becomes

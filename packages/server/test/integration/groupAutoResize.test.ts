@@ -1,15 +1,17 @@
 import { describe, expect, it, beforeEach, afterAll } from "vitest";
-import { pool } from "../../src/db/client.js";
+import { pool, db } from "../../src/db/client.js";
 import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
 import { createVoid } from "../../src/domains/void/voids.js";
 import {
   createGroup,
   findGroupById,
+  recomputeGroupBounds,
   GROUP_MIN_WIDTH,
   GROUP_MIN_HEIGHT,
 } from "../../src/domains/group/groups.js";
 import { createTask, moveTask, deleteTask, duplicateTask } from "../../src/domains/task/tasks.js";
+import { addChecklistItem } from "../../src/domains/task/checklistItems.js";
 import { resetAuthTables, resetOrgTables } from "../helpers/db.js";
 
 /**
@@ -32,7 +34,7 @@ describe("Group auto-sizing (second feature pass)", () => {
   async function setupVoid() {
     const owner = await createUser(`owner-${Math.random()}@example.com`);
     const org = await createOrganization(owner.id, "Acme");
-    const voidResult = await createVoid(org.id, "Void", null, owner.id);
+    const voidResult = await createVoid(org.id, "Void", null, "private", owner.id);
     if (!voidResult.ok) throw new Error("unreachable");
     return { owner, org, void: voidResult.void };
   }
@@ -145,5 +147,48 @@ describe("Group auto-sizing (second feature pass)", () => {
     // bbox slightly further than the original single Task did.
     expect(after!.width).toBeGreaterThanOrEqual(before!.width);
     expect(after!.height).toBeGreaterThanOrEqual(before!.height);
+  });
+
+  it("a Task with any badges (checklist/comment/tag/assignee) makes its Group taller than a plain Task at the same position — the content-aware height fix", async () => {
+    const { owner, void: v } = await setupVoid();
+    // Each Group gets two Tasks: an "anchor" at the origin (just to push the
+    // Group past the minimum-size floor — a single Task's own bbox span is
+    // always too small to do that alone, per the earlier test) and a
+    // "subject" Task spaced far enough below it that the subject alone
+    // determines the Group's bottom edge (maxY), regardless of the small
+    // 24px badges-vs-not difference — isolating exactly what this test is
+    // about. Both Groups are laid out identically except for the subject
+    // Task's badge status.
+    const plainGroup = await createGroup({ voidId: v.id, name: "Plain", x: 0, y: 0 });
+    const badgedGroup = await createGroup({ voidId: v.id, name: "Badged", x: 2000, y: 0 });
+    const plainAnchor = await createTask(
+      { voidId: v.id, title: "Anchor", groupId: plainGroup.id, x: 0, y: 0 },
+      owner.id,
+    );
+    const badgedAnchor = await createTask(
+      { voidId: v.id, title: "Anchor", groupId: badgedGroup.id, x: 2000, y: 0 },
+      owner.id,
+    );
+    if (!plainAnchor.ok || !badgedAnchor.ok) throw new Error("unreachable");
+
+    const plainSubject = await createTask(
+      { voidId: v.id, title: "Subject", groupId: plainGroup.id, x: 0, y: 700 },
+      owner.id,
+    );
+    const badgedSubject = await createTask(
+      { voidId: v.id, title: "Subject", groupId: badgedGroup.id, x: 2000, y: 700 },
+      owner.id,
+    );
+    if (!plainSubject.ok || !badgedSubject.ok) throw new Error("unreachable");
+
+    // Give the badged subject a checklist item (recomputeGroupBounds isn't
+    // triggered by checklist mutations themselves, only by Task create/
+    // move/delete/duplicate — force a recompute the same way a real
+    // subsequent Task move would).
+    await addChecklistItem(badgedSubject.task.id, "Do the thing");
+    const recomputedBadged = await recomputeGroupBounds(db, badgedGroup.id);
+
+    const plainFinal = await findGroupById(plainGroup.id);
+    expect(recomputedBadged.height).toBe(plainFinal!.height + 24);
   });
 });

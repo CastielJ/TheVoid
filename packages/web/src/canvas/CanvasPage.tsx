@@ -61,6 +61,10 @@ export function CanvasPage() {
   }, [savedCamera.data]);
 
   const voidInfo = trpc.void.get.useQuery({ voidId });
+  // Third feature pass — breadcrumb for a nested Void ("Team"); empty array
+  // for a top-level Void, in which case the breadcrumb is just this Void's
+  // own name with nothing ahead of it.
+  const ancestors = trpc.void.getAncestors.useQuery({ voidId });
   const { toggle } = useLeftPanel();
 
   useEffect(() => {
@@ -138,16 +142,62 @@ export function CanvasPage() {
           <Button variant="ghost" onClick={() => navigate(`/orgs/${orgId}`)}>
             ←
           </Button>
-          <span style={{ fontWeight: 500, fontSize: 14 }}>{voidInfo.data?.name ?? "Void"}</span>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 14,
+              minWidth: 0,
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {ancestors.data?.map((a) => (
+              <span key={a.id} style={{ display: "contents" }}>
+                <button
+                  onClick={() => navigate(`/orgs/${orgId}/voids/${a.id}`)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--canvas-text-muted)",
+                    fontSize: 14,
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  {a.name}
+                </button>
+                <span style={{ color: "var(--canvas-text-muted)" }}>/</span>
+              </span>
+            ))}
+            <span style={{ fontWeight: 500 }}>{voidInfo.data?.name ?? "Void"}</span>
+          </div>
           {STATUS_LABEL[connectionStatus] && (
             <span style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
               {STATUS_LABEL[connectionStatus]}
             </span>
           )}
         </div>
-        <span style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
-          Double-click anywhere to create
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <span style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
+            Double-click anywhere to create
+          </span>
+          <button
+            onClick={() => navigate(`/orgs/${orgId}/voids/${voidId}/settings`)}
+            aria-label="Void settings"
+            className="void-icon-btn"
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--canvas-text-muted)",
+              fontSize: 16,
+              padding: 4,
+            }}
+          >
+            ⚙
+          </button>
+        </div>
       </header>
 
       <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>

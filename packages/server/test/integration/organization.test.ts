@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { eq, and } from "drizzle-orm";
 import { pool, db } from "../../src/db/client.js";
-import { memberships, teams, teamMemberships, auditLogs } from "../../src/db/schema.js";
+import { memberships, voids, voidAccessGrants, auditLogs } from "../../src/db/schema.js";
 import { createUser } from "../helpers/testUser.js";
 import { createOrganization } from "../../src/domains/organization/organizations.js";
 import {
@@ -10,8 +10,8 @@ import {
   removeMember,
   transferOwnership,
 } from "../../src/domains/organization/memberships.js";
-import { createTeam } from "../../src/domains/team/teams.js";
-import { addTeamMember } from "../../src/domains/team/teamMemberships.js";
+import { createVoid } from "../../src/domains/void/voids.js";
+import { grantVoidAccess } from "../../src/domains/void/voidAccessGrants.js";
 import { resetAuthTables, resetOrgTables } from "../helpers/db.js";
 
 describe("Organization & Membership domain (implementation-plan.md Phase 2)", () => {
@@ -73,7 +73,7 @@ describe("Organization & Membership domain (implementation-plan.md Phase 2)", ()
     expect(result).toEqual({ ok: false, reason: "cannot_remove_owner" });
   });
 
-  it("removeMember ends the Membership and all of the member's Team memberships in the org (D17)", async () => {
+  it("removeMember ends the Membership and all of the member's Void access grants in the org (D17)", async () => {
     const owner = await createUser("owner4@example.com");
     const member = await createUser("member4@example.com");
     const org = await createOrganization(owner.id, "Acme");
@@ -81,23 +81,25 @@ describe("Organization & Membership domain (implementation-plan.md Phase 2)", ()
       .insert(memberships)
       .values({ organizationId: org.id, userId: member.id, role: "member" });
 
-    const team = await createTeam(org.id, "Engineering", owner.id);
-    await addTeamMember(team.id, member.id, owner.id);
+    const teamResult = await createVoid(org.id, "Engineering", null, "private", owner.id);
+    if (!teamResult.ok) throw new Error("unreachable");
+    const team = teamResult.void;
+    await grantVoidAccess(team.id, member.id, "editor", owner.id);
 
     const result = await removeMember(org.id, member.id, owner.id);
     expect(result).toEqual({ ok: true });
 
     expect(await getActiveMembership(member.id, org.id)).toBeNull();
 
-    const remainingTeamMembership = await db
+    const remainingGrant = await db
       .select()
-      .from(teamMemberships)
-      .where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.userId, member.id)));
-    expect(remainingTeamMembership).toHaveLength(0);
+      .from(voidAccessGrants)
+      .where(and(eq(voidAccessGrants.voidId, team.id), eq(voidAccessGrants.userId, member.id)));
+    expect(remainingGrant).toHaveLength(0);
 
-    // The Team itself, and the other member's rows, are otherwise untouched.
-    const [stillTeam] = await db.select().from(teams).where(eq(teams.id, team.id));
-    expect(stillTeam).toBeDefined();
+    // The Void itself, and the other member's rows, are otherwise untouched.
+    const [stillVoid] = await db.select().from(voids).where(eq(voids.id, team.id));
+    expect(stillVoid).toBeDefined();
   });
 
   it("transferOwnership demotes the current owner and promotes the target atomically (C7)", async () => {
