@@ -38,6 +38,15 @@ export async function buildApp() {
           : undefined,
     },
     genReqId: () => crypto.randomUUID(),
+    // tRPC's fastify adapter serves every batched call through one dynamic
+    // `:path` segment — a comma-joined list of procedure names (e.g.
+    // "notification.countUnread,organization.listMembers,team.list,void.list").
+    // Fastify's default maxParamLength (100) truncates that segment on any
+    // page loading more than a handful of queries at once, so the route
+    // fails to match and the whole batch silently 404s/414s — every query in
+    // it (Teams, Voids, org members, invites) comes back as if it never
+    // existed. Raised well past any realistic batch size.
+    routerOptions: { maxParamLength: 2000 },
   });
 
   // Session cookie parsing (domains/auth/cookies.ts) — no signing secret
