@@ -16,18 +16,19 @@ import {
 } from "./spatialIndex";
 import { TaskCard } from "./TaskCard";
 import { GroupBox } from "./GroupBox";
+import { EdgeLayer } from "./EdgeLayer";
+import { linkTypeColor } from "./edgeStyle";
+import { showToast } from "../ui/toastStore";
+import { COMPACT_TASK_WIDTH, compactTaskHeightFor } from "./taskFootprint";
 
 const WASD_SPEED_WORLD_PER_SEC = 700;
 const CAMERA_SAVE_DEBOUNCE_MS = 800;
 
 // Mirrors domains/group/groups.ts's server-side constants exactly (values
 // measured directly from the real rendered compact TaskCard, not guessed —
-// see that file's own comment) — used only to preview what the server
-// WOULD compute if a dragged Task were dropped into a given Group, never
-// written anywhere itself.
-const GROUP_PREVIEW_TASK_WIDTH = 220;
-const GROUP_PREVIEW_TASK_HEIGHT_BASE = 76;
-const GROUP_PREVIEW_TASK_HEIGHT_WITH_BADGES = 100;
+// see taskFootprint.ts's own comment) — used only to preview what the
+// server WOULD compute if a dragged Task were dropped into a given Group,
+// never written anywhere itself.
 const GROUP_PREVIEW_PADDING = 24;
 const GROUP_PREVIEW_MIN_WIDTH = 280;
 const GROUP_PREVIEW_MIN_HEIGHT = 160;
@@ -68,14 +69,30 @@ export function CanvasViewport({
   const selection = useCanvasStore((s) => s.selection);
   const removeTask = useCanvasStore((s) => s.removeTask);
   const removeGroup = useCanvasStore((s) => s.removeGroup);
+  const removeEdge = useCanvasStore((s) => s.removeEdge);
   const applyTask = useCanvasStore((s) => s.applyTask);
   const expandedTaskIds = useCanvasStore((s) => s.expandedTaskIds);
   const draggingTaskId = useCanvasStore((s) => s.draggingTaskId);
+  const liveDragPosition = useCanvasStore((s) => s.liveDragPosition);
+  const markPendingDeletion = useCanvasStore((s) => s.markPendingDeletion);
+  const clearPendingDeletion = useCanvasStore((s) => s.clearPendingDeletion);
+  const linkArmed = useCanvasStore((s) => s.linkArmed);
+  const armedSourceTaskId = useCanvasStore((s) => s.armedSourceTaskId);
+  const activeLinkType = useCanvasStore((s) => s.activeLinkType);
+  const linkDraft = useCanvasStore((s) => s.linkDraft);
+  const disarmLinking = useCanvasStore((s) => s.disarmLinking);
+  const clearLinkDraft = useCanvasStore((s) => s.clearLinkDraft);
 
   const deleteTask = trpc.task.delete.useMutation();
   const deleteGroup = trpc.group.delete.useMutation();
-  const duplicateTask = trpc.task.duplicate.useMutation({ onSuccess: (t) => applyTask(t) });
-  const saveCamera = trpc.void.saveCamera.useMutation();
+  const deleteTaskLink = trpc.taskLink.delete.useMutation();
+  const duplicateTask = trpc.task.duplicate.useMutation({
+    onSuccess: (t) => applyTask(t),
+    onError: () => showToast("Failed to duplicate Task."),
+  });
+  const saveCamera = trpc.void.saveCamera.useMutation({
+    onError: () => showToast("Failed to save camera position.", "info"),
+  });
   // Second feature pass: one batched query per Void load for every visible
   // compact card's count badges, instead of one query per card.
   const summaries = trpc.task.listSummaries.useQuery({ voidId });
@@ -395,12 +412,40 @@ export function CanvasViewport({
       if (e.key === "Delete" || e.key === "Backspace") {
         const current = useCanvasStore.getState().selection;
         for (const entry of current.values()) {
+          markPendingDeletion(entry.kind, entry.id);
           if (entry.kind === "task") {
-            deleteTask.mutate({ taskId: entry.id });
-            removeTask(entry.id);
+            deleteTask.mutate(
+              { taskId: entry.id },
+              {
+                onSuccess: () => removeTask(entry.id),
+                onError: () => {
+                  clearPendingDeletion(entry.kind, entry.id);
+                  showToast("Failed to delete Task.");
+                },
+              },
+            );
+          } else if (entry.kind === "group") {
+            deleteGroup.mutate(
+              { groupId: entry.id },
+              {
+                onSuccess: () => removeGroup(entry.id),
+                onError: () => {
+                  clearPendingDeletion(entry.kind, entry.id);
+                  showToast("Failed to delete Group.");
+                },
+              },
+            );
           } else {
-            deleteGroup.mutate({ groupId: entry.id });
-            removeGroup(entry.id);
+            deleteTaskLink.mutate(
+              { taskLinkId: entry.id },
+              {
+                onSuccess: () => removeEdge(entry.id),
+                onError: () => {
+                  clearPendingDeletion(entry.kind, entry.id);
+                  showToast("Failed to delete connection.");
+                },
+              },
+            );
           }
         }
         clearSelection();
@@ -422,40 +467,59 @@ export function CanvasViewport({
     // Mutation-object identities are stable across renders, so deps are intentionally left empty.
   }, []);
 
+  // Third feature pass — Escape cancels either Task Link creation path
+  // (the button-armed click-source/click-target mode, or a connector-
+  // handle drag in progress), same convention CanvasCreationPanel already
+  // uses for its own Escape-to-close. Not gated on isTypingTarget — a
+  // global "cancel whatever's in progress" key.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (useCanvasStore.getState().linkArmed) disarmLinking();
+      if (useCanvasStore.getState().linkDraft) clearLinkDraft();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [disarmLinking, clearLinkDraft]);
+
   // Second feature pass — live "if dropped here, this Group would resize
   // to..." preview while a Task drag is hovering a Group's rect. Recomputed
-  // on every render during a drag (tasks Map changes on every pointermove
-  // via setLocalPosition already), mirroring domains/group/groups.ts's
+  // on every render during a drag, mirroring domains/group/groups.ts's
   // server-side bbox math exactly so the preview matches what will actually
   // be persisted once the drag ends.
+  //
+  // Third feature pass: the dragged Task's own live position now comes from
+  // `liveDragPosition`, not the `tasks` Map — that Map deliberately stops
+  // updating per-frame during a drag (see setLiveDragPosition's docstring in
+  // store.ts) so the spatial index doesn't rebuild every pointermove. This
+  // memo is unaffected by that change staying reactive per-frame: it only
+  // loops over one Group's members at a time, already cheap at scale.
   const dragPreview = useMemo(() => {
     if (!draggingTaskId) return null;
     const draggingTask = tasks.get(draggingTaskId);
     if (!draggingTask) return null;
-    // Mirrors domains/task/taskContentFlags.ts's "has badges" definition
-    // exactly: checklist/comment/tag/assignee count > 0 (a due date never
-    // adds height — CompactBody renders it in the same row as status).
-    const hasBadges = (taskId: string) => {
-      const s = summaryByTaskId.get(taskId);
-      return Boolean(
-        s && (s.checklistCount > 0 || s.commentCount > 0 || s.tagCount > 0 || s.assigneeCount > 0),
-      );
-    };
-    const heightFor = (taskId: string) =>
-      hasBadges(taskId) ? GROUP_PREVIEW_TASK_HEIGHT_WITH_BADGES : GROUP_PREVIEW_TASK_HEIGHT_BASE;
+    const liveX =
+      liveDragPosition?.kind === "task" && liveDragPosition.id === draggingTaskId
+        ? liveDragPosition.x
+        : draggingTask.x;
+    const liveY =
+      liveDragPosition?.kind === "task" && liveDragPosition.id === draggingTaskId
+        ? liveDragPosition.y
+        : draggingTask.y;
+    const heightFor = (taskId: string) => compactTaskHeightFor(summaryByTaskId.get(taskId));
     for (const g of groups.values()) {
-      const withinX = draggingTask.x >= g.x && draggingTask.x <= g.x + g.width;
-      const withinY = draggingTask.y >= g.y && draggingTask.y <= g.y + g.height;
+      const withinX = liveX >= g.x && liveX <= g.x + g.width;
+      const withinY = liveY >= g.y && liveY <= g.y + g.height;
       if (!withinX || !withinY) continue;
 
       const positions = [...tasks.values()]
         .filter((t) => t.groupId === g.id && t.id !== draggingTaskId)
         .map((t) => ({ id: t.id, x: t.x, y: t.y }));
-      positions.push({ id: draggingTaskId, x: draggingTask.x, y: draggingTask.y });
+      positions.push({ id: draggingTaskId, x: liveX, y: liveY });
 
       const minX = Math.min(...positions.map((p) => p.x));
       const minY = Math.min(...positions.map((p) => p.y));
-      const maxX = Math.max(...positions.map((p) => p.x + GROUP_PREVIEW_TASK_WIDTH));
+      const maxX = Math.max(...positions.map((p) => p.x + COMPACT_TASK_WIDTH));
       const maxY = Math.max(...positions.map((p) => p.y + heightFor(p.id)));
       return {
         groupId: g.id,
@@ -468,7 +532,7 @@ export function CanvasViewport({
       };
     }
     return null;
-  }, [draggingTaskId, tasks, groups, summaryByTaskId]);
+  }, [draggingTaskId, liveDragPosition, tasks, groups, summaryByTaskId]);
 
   function handleBackgroundDoubleClick(e: React.MouseEvent) {
     // Second feature pass: GroupBox no longer consumes its own double-click
@@ -522,7 +586,11 @@ export function CanvasViewport({
         }}
       >
         {[...groups.values()]
-          .filter((g) => visibleGroupIds.has(g.id))
+          .filter(
+            (g) =>
+              visibleGroupIds.has(g.id) ||
+              (liveDragPosition?.kind === "group" && liveDragPosition.id === g.id),
+          )
           .map((g) => (
             <GroupBox
               key={g.id}
@@ -532,10 +600,11 @@ export function CanvasViewport({
             />
           ))}
         {[...tasks.values()]
-          .filter((t) => visibleTaskIds.has(t.id))
+          .filter((t) => visibleTaskIds.has(t.id) || t.id === draggingTaskId)
           .map((t) => (
             <TaskCard key={t.id} task={t} summary={summaryByTaskId.get(t.id)} />
           ))}
+        <EdgeLayer summaryByTaskId={summaryByTaskId} />
       </div>
 
       {selectionBoxScreen && (
@@ -551,6 +620,58 @@ export function CanvasViewport({
             pointerEvents: "none",
           }}
         />
+      )}
+
+      {linkDraft && (
+        // Third feature pass — live preview line while dragging a Task
+        // Link's connector handle. position:fixed (not inside the world-
+        // transform container) so it draws directly in raw client
+        // coordinates with no camera/world conversion, escaping this
+        // container's overflow:hidden regardless of its own position.
+        <svg
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            pointerEvents: "none",
+          }}
+        >
+          <line
+            x1={linkDraft.sourceScreenX}
+            y1={linkDraft.sourceScreenY}
+            x2={linkDraft.pointerScreenX}
+            y2={linkDraft.pointerScreenY}
+            stroke={linkTypeColor(linkDraft.type)}
+            strokeWidth={2}
+            strokeDasharray="6 4"
+          />
+        </svg>
+      )}
+
+      {linkArmed && (
+        <div
+          role="status"
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "6px 12px",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--canvas-surface)",
+            border: `1px solid ${linkTypeColor(activeLinkType)}`,
+            color: "var(--canvas-text)",
+            fontSize: 12,
+            boxShadow: "var(--shadow-md)",
+          }}
+        >
+          {armedSourceTaskId
+            ? "Click the target Task (Escape to cancel)"
+            : "Click the source Task (Escape to cancel)"}
+        </div>
       )}
 
       <div

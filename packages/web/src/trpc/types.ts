@@ -5,6 +5,8 @@ type RouterOutputs = inferRouterOutputs<AppRouter>;
 
 export type Task = RouterOutputs["task"]["get"];
 export type Group = RouterOutputs["group"]["list"][number];
+export type Edge = RouterOutputs["taskLink"]["list"][number];
+export type TaskLinkType = Edge["type"];
 export type VoidCamera = RouterOutputs["void"]["getCamera"];
 export type Tag = RouterOutputs["tag"]["list"][number];
 export type EligibleMember = RouterOutputs["void"]["listEligibleMembers"][number];

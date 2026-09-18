@@ -24,6 +24,7 @@ import {
   moveTask,
   deleteTask,
   duplicateTask,
+  DependencyNotSatisfiedError,
 } from "../domains/task/tasks.js";
 import { assignTask, unassignTask, listAssigneesForTask } from "../domains/task/taskAssignees.js";
 import {
@@ -134,7 +135,15 @@ export const taskRouter = router({
     .use(requireCapability(canEditVoidForTask, (input: { taskId: string }) => input.taskId))
     .mutation(async ({ ctx, input }) => {
       const { taskId, tagNames, ...changes } = input;
-      const task = await updateTask(taskId, changes, ctx.session.user.id);
+      let task: Awaited<ReturnType<typeof updateTask>>;
+      try {
+        task = await updateTask(taskId, changes, ctx.session.user.id);
+      } catch (err) {
+        if (err instanceof DependencyNotSatisfiedError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
       if (!task) throw new TRPCError({ code: "NOT_FOUND" });
       if (tagNames !== undefined) {
         await assignTagsToTask(taskId, tagNames, ctx.session.user.id);
@@ -175,11 +184,18 @@ export const taskRouter = router({
     .mutation(async ({ input }) => {
       const existing = await findTaskById(input.taskId);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
-      const result = await deleteTask(input.taskId);
+      const result = await deleteTask(existing);
       if (!result.ok) throw new TRPCError({ code: "NOT_FOUND" });
       publishVoidEvent(existing.voidId, "task.deleted", { taskId: input.taskId });
       if (result.recomputedGroup) {
         publishVoidEvent(existing.voidId, "group.updated", result.recomputedGroup);
+      }
+      // TaskLinks referencing this Task were hard-deleted as part of
+      // deleteTask's own transaction (the real cascade — see that
+      // function's docstring) — broadcast so every other connected client
+      // drops the now-dangling arrow too.
+      for (const taskLinkId of result.deletedLinkIds) {
+        publishVoidEvent(existing.voidId, "taskLink.deleted", { taskLinkId });
       }
       return { ok: true as const };
     }),
@@ -212,10 +228,10 @@ export const taskRouter = router({
       }
       // Assignee changes broadcast as task.updated (D32 defines Task
       // create/update/move/delete as the sync surface; there's no separate
-      // "task.assigned" event type) — the task itself is fetched fresh
-      // since assignTask only returns { ok: true }.
-      const task = await findTaskById(input.taskId);
-      if (task) publishVoidEvent(task.voidId, "task.updated", task);
+      // "task.assigned" event type) — assignTask already fetched the task
+      // for its own eligibility check, so it's returned here instead of
+      // being fetched a second time.
+      publishVoidEvent(result.task.voidId, "task.updated", result.task);
       return { ok: true as const };
     }),
 

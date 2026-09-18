@@ -1,10 +1,12 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { taskPriorityValues, taskPriorityLabels } from "@void/shared";
 import { trpc } from "../trpc/client";
 import { useCanvasStore } from "./store";
-import { Button } from "../ui/Button";
+import { Button, Spinner } from "../ui/Button";
 import { TagPicker } from "./TagPicker";
 import { AssigneePicker } from "./AssigneePicker";
+import { showToast, mutationErrorMessage } from "../ui/toastStore";
+import { linkTypeColor } from "./edgeStyle";
 import type { Task } from "../trpc/types";
 
 const DRAG_THRESHOLD_PX = 3;
@@ -48,6 +50,7 @@ export const TaskCard = memo(function TaskCard({
   const isSelected = useCanvasStore((s) => s.isSelected("task", task.id));
   const isExpanded = useCanvasStore((s) => s.isExpanded(task.id));
   const toggleExpanded = useCanvasStore((s) => s.toggleExpanded);
+  const isPendingDeletion = useCanvasStore((s) => s.isPendingDeletion("task", task.id));
   // Third feature pass: Save/Discard on the expanded card's core fields
   // (description/status/priority/due date/tags). ExpandedBody owns the
   // actual draft state and reports dirtiness up here so the × button (the
@@ -64,16 +67,79 @@ export const TaskCard = memo(function TaskCard({
   const select = useCanvasStore((s) => s.select);
   const setLocalPosition = useCanvasStore((s) => s.setLocalPosition);
   const setDraggingTaskId = useCanvasStore((s) => s.setDraggingTaskId);
+  const setLiveDragPosition = useCanvasStore((s) => s.setLiveDragPosition);
+  const clearLiveDragPosition = useCanvasStore((s) => s.clearLiveDragPosition);
+  const setMeasuredFootprint = useCanvasStore((s) => s.setMeasuredFootprint);
+  const clearMeasuredFootprint = useCanvasStore((s) => s.clearMeasuredFootprint);
+  const liveDragPosition = useCanvasStore((s) =>
+    s.liveDragPosition?.kind === "task" && s.liveDragPosition.id === task.id
+      ? s.liveDragPosition
+      : null,
+  );
   const applyTask = useCanvasStore((s) => s.applyTask);
   const removeTask = useCanvasStore((s) => s.removeTask);
   const voidId = useCanvasStore((s) => s.voidId);
 
-  const move = trpc.task.move.useMutation({ onSuccess: (updated) => applyTask(updated) });
-  const update = trpc.task.update.useMutation({ onSuccess: (updated) => applyTask(updated) });
-  const deleteTask = trpc.task.delete.useMutation({ onSuccess: () => removeTask(task.id) });
+  // Third feature pass — Task Link ("arrow") creation UX.
+  const linkArmed = useCanvasStore((s) => s.linkArmed);
+  const armedSourceTaskId = useCanvasStore((s) => s.armedSourceTaskId);
+  const activeLinkType = useCanvasStore((s) => s.activeLinkType);
+  const disarmLinking = useCanvasStore((s) => s.disarmLinking);
+  const setArmedSource = useCanvasStore((s) => s.setArmedSource);
+  const startLinkDraft = useCanvasStore((s) => s.startLinkDraft);
+  const updateLinkDraft = useCanvasStore((s) => s.updateLinkDraft);
+  const clearLinkDraft = useCanvasStore((s) => s.clearLinkDraft);
+  const isLinkHoverTarget = useCanvasStore((s) => s.linkDraft?.hoverTargetId === task.id);
+  const isArmedSource = armedSourceTaskId === task.id;
+  const applyEdge = useCanvasStore((s) => s.applyEdge);
+
+  const renderX = liveDragPosition?.x ?? task.x;
+  const renderY = liveDragPosition?.y ?? task.y;
+
+  const move = trpc.task.move.useMutation({
+    onSuccess: (updated) => applyTask(updated),
+    onError: () => showToast("Failed to move Task."),
+  });
+  const update = trpc.task.update.useMutation({
+    onSuccess: (updated) => applyTask(updated),
+    onError: (err) => showToast(mutationErrorMessage(err, "Failed to update Task.")),
+  });
+  const deleteTask = trpc.task.delete.useMutation({
+    onSuccess: () => removeTask(task.id),
+    onError: () => showToast("Failed to delete Task."),
+  });
   const duplicateTask = trpc.task.duplicate.useMutation({
     onSuccess: (created) => applyTask(created),
+    onError: () => showToast("Failed to duplicate Task."),
   });
+  const createTaskLink = trpc.taskLink.create.useMutation({
+    onSuccess: (created) => applyEdge(created),
+    onError: (err) => showToast(mutationErrorMessage(err, "Failed to connect Tasks.")),
+  });
+
+  const isDeleting = isPendingDeletion || deleteTask.isPending;
+
+  // Third feature pass: an expanded card's true height is content-
+  // dependent (checklist/comment count) — reported to the store so
+  // EdgeLayer's arrow anchors can track the real border instead of the
+  // fixed approximation spatialIndex.ts uses for bucket placement only.
+  // Scoped to expanded cards only (typically zero-or-one at a time, since
+  // expand is per-card client state) — not every visible card.
+  const cardRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!isExpanded) return;
+    const el = cardRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      setMeasuredFootprint(task.id, { width: el.offsetWidth, height: el.offsetHeight });
+    });
+    observer.observe(el);
+    setMeasuredFootprint(task.id, { width: el.offsetWidth, height: el.offsetHeight });
+    return () => {
+      observer.disconnect();
+      clearMeasuredFootprint(task.id);
+    };
+  }, [isExpanded, task.id, setMeasuredFootprint, clearMeasuredFootprint]);
 
   const dragState = useRef<{
     pointerId: number;
@@ -85,7 +151,7 @@ export const TaskCard = memo(function TaskCard({
   } | null>(null);
 
   function handlePointerDown(e: React.PointerEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || isDeleting) return;
     e.stopPropagation();
     (e.target as Element).setPointerCapture(e.pointerId);
     dragState.current = {
@@ -112,7 +178,7 @@ export const TaskCard = memo(function TaskCard({
     }
     if (!drag.moved) setDraggingTaskId(task.id);
     drag.moved = true;
-    setLocalPosition("task", task.id, drag.startWorldX + dx, drag.startWorldY + dy);
+    setLiveDragPosition("task", task.id, drag.startWorldX + dx, drag.startWorldY + dy);
   }
 
   function handlePointerUp(e: React.PointerEvent) {
@@ -121,12 +187,68 @@ export const TaskCard = memo(function TaskCard({
     dragState.current = null;
     if (drag.moved) {
       setDraggingTaskId(null);
-      const current = useCanvasStore.getState().tasks.get(task.id);
-      if (current) move.mutate({ taskId: task.id, x: current.x, y: current.y });
+      const zoom = useCanvasStore.getState().camera.zoom;
+      const finalX = drag.startWorldX + (e.clientX - drag.startScreenX) / zoom;
+      const finalY = drag.startWorldY + (e.clientY - drag.startScreenY) / zoom;
+      // Commit into the real `tasks` Map exactly once, at drag-end — same
+      // "local override until the move mutation resolves" contract
+      // setLocalPosition already documents — then drop the per-frame
+      // liveDragPosition override now that the real Map has caught up.
+      setLocalPosition("task", task.id, finalX, finalY);
+      clearLiveDragPosition();
+      move.mutate({ taskId: task.id, x: finalX, y: finalY });
+    } else if (linkArmed) {
+      // Fallback creation path (armed via a toolbar button, CanvasPage.tsx):
+      // first click sets the source; a second click on a DIFFERENT Task
+      // completes the link. Clicking the already-armed source again just
+      // cancels (same Task can't link to itself).
+      if (!armedSourceTaskId) {
+        setArmedSource(task.id);
+      } else if (armedSourceTaskId === task.id) {
+        disarmLinking();
+      } else {
+        createTaskLink.mutate({
+          sourceTaskId: armedSourceTaskId,
+          targetTaskId: task.id,
+          type: activeLinkType,
+        });
+        disarmLinking();
+      }
     } else {
       select({ kind: "task", id: task.id }, e.shiftKey);
       toggleExpanded(task.id);
     }
+  }
+
+  function handleLinkHandlePointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    startLinkDraft(task.id, activeLinkType, e.clientX, e.clientY);
+  }
+
+  function handleLinkHandlePointerMove(e: React.PointerEvent) {
+    if (!useCanvasStore.getState().linkDraft) return;
+    // DOM-based hit-test (no world-space conversion needed, and correctly
+    // respects virtualization — you can't drop a connection on a Task you
+    // can't see): the topmost element under the pointer, if it's a
+    // different TaskCard, is the live hover target.
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const targetCard = el?.closest<HTMLElement>('[data-testid="task-card"]');
+    const targetId = targetCard?.dataset.taskId;
+    const hoverTargetId = targetId && targetId !== task.id ? targetId : null;
+    updateLinkDraft(e.clientX, e.clientY, hoverTargetId);
+  }
+
+  function handleLinkHandlePointerUp(e: React.PointerEvent) {
+    const draft = useCanvasStore.getState().linkDraft;
+    clearLinkDraft();
+    if (!draft || draft.sourceTaskId !== task.id) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const targetCard = el?.closest<HTMLElement>('[data-testid="task-card"]');
+    const targetId = targetCard?.dataset.taskId;
+    if (!targetId || targetId === task.id) return;
+    createTaskLink.mutate({ sourceTaskId: task.id, targetTaskId: targetId, type: draft.type });
   }
 
   function toggleDone(e: React.MouseEvent) {
@@ -134,8 +256,12 @@ export const TaskCard = memo(function TaskCard({
     update.mutate({ taskId: task.id, status: task.status === "done" ? "todo" : "done" });
   }
 
+  const linkHighlightColor =
+    isArmedSource || isLinkHoverTarget ? linkTypeColor(activeLinkType) : null;
+
   return (
     <div
+      ref={cardRef}
       data-testid="task-card"
       data-task-id={task.id}
       onPointerDown={isExpanded ? undefined : handlePointerDown}
@@ -143,25 +269,69 @@ export const TaskCard = memo(function TaskCard({
       onPointerUp={isExpanded ? undefined : handlePointerUp}
       style={{
         position: "absolute",
-        left: task.x,
-        top: task.y,
+        left: renderX,
+        top: renderY,
         width: isExpanded ? 320 : 220,
         background: "var(--canvas-surface)",
-        border: `1px solid ${isSelected ? "var(--canvas-selection-border)" : "var(--canvas-border)"}`,
-        boxShadow: isSelected ? "0 0 0 3px var(--canvas-selection)" : "var(--shadow-sm)",
+        border: `1px solid ${linkHighlightColor ?? (isSelected ? "var(--canvas-selection-border)" : "var(--canvas-border)")}`,
+        boxShadow: linkHighlightColor
+          ? `0 0 0 3px ${linkHighlightColor}`
+          : isSelected
+            ? "0 0 0 3px var(--canvas-selection)"
+            : "var(--shadow-sm)",
         borderRadius: "var(--radius-md)",
         color: "var(--canvas-text)",
         userSelect: "none",
         touchAction: "none",
         zIndex: isExpanded ? 10 : undefined,
         cursor: isExpanded ? "default" : "grab",
+        opacity: isDeleting ? 0.5 : 1,
+        pointerEvents: isDeleting ? "none" : undefined,
         transition:
-          "border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), width var(--motion-base) var(--ease-standard)",
+          "border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), width var(--motion-base) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard)",
       }}
     >
+      {!isDeleting && (
+        <div
+          role="button"
+          aria-label="Drag to connect to another Task"
+          className="void-task-link-handle"
+          onPointerDown={handleLinkHandlePointerDown}
+          onPointerMove={handleLinkHandlePointerMove}
+          onPointerUp={handleLinkHandlePointerUp}
+          style={{
+            position: "absolute",
+            top: "50%",
+            right: -7,
+            width: 14,
+            height: 14,
+            borderRadius: "50%",
+            background: linkTypeColor(activeLinkType),
+            border: "2px solid var(--canvas-surface)",
+            transform: "translateY(-50%)",
+            cursor: "crosshair",
+            zIndex: 15,
+            touchAction: "none",
+          }}
+        />
+      )}
+      {isDeleting && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            zIndex: 20,
+          }}
+        >
+          <Spinner />
+        </div>
+      )}
       <CardHeader
         task={task}
         isExpanded={isExpanded}
+        disabled={update.isPending}
         onToggleDone={toggleDone}
         onDragPointerDown={isExpanded ? handlePointerDown : undefined}
         onDragPointerMove={isExpanded ? handlePointerMove : undefined}
@@ -180,6 +350,8 @@ export const TaskCard = memo(function TaskCard({
           task={task}
           voidId={voidId}
           update={update}
+          isDeleting={isDeleting}
+          isDuplicating={duplicateTask.isPending}
           onDelete={() => deleteTask.mutate({ taskId: task.id })}
           onDuplicate={() => duplicateTask.mutate({ taskId: task.id })}
           onDirtyChange={setIsDirty}
@@ -195,6 +367,7 @@ export const TaskCard = memo(function TaskCard({
 function CardHeader({
   task,
   isExpanded,
+  disabled,
   onToggleDone,
   onDragPointerDown,
   onDragPointerMove,
@@ -204,6 +377,7 @@ function CardHeader({
 }: {
   task: Task;
   isExpanded: boolean;
+  disabled?: boolean;
   onToggleDone: (e: React.MouseEvent) => void;
   onDragPointerDown?: (e: React.PointerEvent) => void;
   onDragPointerMove?: (e: React.PointerEvent) => void;
@@ -234,8 +408,9 @@ function CardHeader({
         onChange={() => {}}
         onClick={onToggleDone}
         onPointerDown={(e) => e.stopPropagation()}
+        disabled={disabled}
         aria-label={task.status === "done" ? "Mark as not done" : "Mark as done"}
-        style={{ marginTop: 3, flexShrink: 0, cursor: "pointer" }}
+        style={{ marginTop: 3, flexShrink: 0, cursor: disabled ? "not-allowed" : "pointer" }}
       />
       {isExpanded ? (
         <input
@@ -244,6 +419,7 @@ function CardHeader({
           onChange={(e) => setTitle(e.target.value)}
           onPointerDown={(e) => e.stopPropagation()}
           onBlur={() => title.trim() && title !== task.title && onCommitTitle(title)}
+          disabled={disabled}
           style={{
             flex: 1,
             background: "transparent",
@@ -367,6 +543,8 @@ function ExpandedBody({
   task,
   voidId,
   update,
+  isDeleting,
+  isDuplicating,
   onDelete,
   onDuplicate,
   onDirtyChange,
@@ -377,6 +555,8 @@ function ExpandedBody({
   task: Task;
   voidId: string;
   update: ReturnType<typeof trpc.task.update.useMutation>;
+  isDeleting: boolean;
+  isDuplicating: boolean;
   onDelete: () => void;
   onDuplicate: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -470,12 +650,14 @@ function ExpandedBody({
       utils.task.listAssignees.invalidate({ taskId });
       utils.task.listSummaries.invalidate({ voidId });
     },
+    onError: (err) => showToast(mutationErrorMessage(err, "Failed to assign Task.")),
   });
   const unassign = trpc.task.unassign.useMutation({
     onSuccess: () => {
       utils.task.listAssignees.invalidate({ taskId });
       utils.task.listSummaries.invalidate({ voidId });
     },
+    onError: () => showToast("Failed to unassign Task."),
   });
 
   const checklist = trpc.task.listChecklistItems.useQuery({ taskId });
@@ -484,18 +666,21 @@ function ExpandedBody({
       utils.task.listChecklistItems.invalidate({ taskId });
       utils.task.listSummaries.invalidate({ voidId });
     },
+    onError: () => showToast("Failed to add checklist item."),
   });
   const toggleChecklistItem = trpc.task.toggleChecklistItem.useMutation({
     onSuccess: () => {
       utils.task.listChecklistItems.invalidate({ taskId });
       utils.task.listSummaries.invalidate({ voidId });
     },
+    onError: () => showToast("Failed to update checklist item."),
   });
   const deleteChecklistItem = trpc.task.deleteChecklistItem.useMutation({
     onSuccess: () => {
       utils.task.listChecklistItems.invalidate({ taskId });
       utils.task.listSummaries.invalidate({ voidId });
     },
+    onError: () => showToast("Failed to delete checklist item."),
   });
   const [newChecklistLabel, setNewChecklistLabel] = useState("");
 
@@ -506,6 +691,7 @@ function ExpandedBody({
       utils.task.listSummaries.invalidate({ voidId });
       return utils.task.listComments.invalidate({ taskId });
     },
+    onError: () => showToast("Failed to add comment."),
   });
   const [newComment, setNewComment] = useState("");
 
@@ -664,6 +850,8 @@ function ExpandedBody({
                   <Button
                     variant="ghost"
                     onClick={() => unassign.mutate({ taskId, userId: a.userId })}
+                    disabled={unassign.isPending}
+                    loading={unassign.isPending}
                   >
                     Remove
                   </Button>
@@ -705,8 +893,14 @@ function ExpandedBody({
               </span>
               <button
                 onClick={() => deleteChecklistItem.mutate({ itemId: item.id })}
+                disabled={deleteChecklistItem.isPending}
                 aria-label={`Delete checklist item: ${item.label}`}
-                style={{ background: "none", border: "none", color: "var(--canvas-text-muted)" }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--canvas-text-muted)",
+                  cursor: deleteChecklistItem.isPending ? "not-allowed" : "pointer",
+                }}
               >
                 ×
               </button>
@@ -729,7 +923,12 @@ function ExpandedBody({
             placeholder="Add item…"
             style={{ ...fieldStyle, flex: 1 }}
           />
-          <Button type="submit" variant="secondary">
+          <Button
+            type="submit"
+            variant="secondary"
+            disabled={addChecklistItem.isPending}
+            loading={addChecklistItem.isPending}
+          >
             Add
           </Button>
         </form>
@@ -762,17 +961,32 @@ function ExpandedBody({
             placeholder="Write a comment… (@username to mention)"
             style={{ ...fieldStyle, flex: 1 }}
           />
-          <Button type="submit" variant="secondary">
+          <Button
+            type="submit"
+            variant="secondary"
+            disabled={addComment.isPending}
+            loading={addComment.isPending}
+          >
             Send
           </Button>
         </form>
       </section>
 
       <div style={{ display: "flex", gap: 8 }}>
-        <Button variant="secondary" onClick={onDuplicate}>
+        <Button
+          variant="secondary"
+          onClick={onDuplicate}
+          disabled={isDuplicating || isDeleting}
+          loading={isDuplicating}
+        >
           Duplicate
         </Button>
-        <Button variant="danger" onClick={onDelete}>
+        <Button
+          variant="danger"
+          onClick={onDelete}
+          disabled={isDeleting || isDuplicating}
+          loading={isDeleting}
+        >
           Delete
         </Button>
       </div>

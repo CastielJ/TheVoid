@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { trpc } from "../trpc/client";
 import { useCanvasStore } from "../canvas/store";
-import type { Task, Group } from "../trpc/types";
+import type { Task, Group, Edge } from "../trpc/types";
 
 type ServerMessage =
   | { type: "subscribed"; voidId: string }
@@ -16,7 +16,9 @@ type ServerMessage =
   | { type: "task.deleted"; voidId: string; payload: { taskId: string } }
   | { type: "group.created" | "group.updated"; voidId: string; payload: Group }
   | { type: "group.deleted"; voidId: string; payload: { groupId: string } }
-  | { type: "void.deleted"; voidId: string; payload: { voidId: string } };
+  | { type: "void.deleted"; voidId: string; payload: { voidId: string } }
+  | { type: "taskLink.created"; voidId: string; payload: Edge }
+  | { type: "taskLink.deleted"; voidId: string; payload: { taskLinkId: string } };
 
 function wsUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -45,6 +47,8 @@ export function useVoidRealtime(voidId: string, callbacks: VoidRealtimeCallbacks
   const removeTask = useCanvasStore((s) => s.removeTask);
   const applyGroup = useCanvasStore((s) => s.applyGroup);
   const removeGroup = useCanvasStore((s) => s.removeGroup);
+  const applyEdge = useCanvasStore((s) => s.applyEdge);
+  const removeEdge = useCanvasStore((s) => s.removeEdge);
   const hydrate = useCanvasStore((s) => s.hydrate);
   const setConnectionStatus = useCanvasStore((s) => s.setConnectionStatus);
 
@@ -59,11 +63,12 @@ export function useVoidRealtime(voidId: string, callbacks: VoidRealtimeCallbacks
     let hasConnectedBefore = false;
 
     async function handleSubscribed() {
-      const [tasks, groups] = await Promise.all([
+      const [tasks, groups, edges] = await Promise.all([
         utils.task.list.fetch({ voidId }),
         utils.group.list.fetch({ voidId }),
+        utils.taskLink.list.fetch({ voidId }),
       ]);
-      hydrate(voidId, tasks, groups);
+      hydrate(voidId, tasks, groups, edges);
       setConnectionStatus("connected");
       reconnectAttempt = 0;
     }
@@ -122,6 +127,12 @@ export function useVoidRealtime(voidId: string, callbacks: VoidRealtimeCallbacks
             return;
           case "group.deleted":
             removeGroup(message.payload.groupId);
+            return;
+          case "taskLink.created":
+            applyEdge(message.payload);
+            return;
+          case "taskLink.deleted":
+            removeEdge(message.payload.taskLinkId);
             return;
         }
       });

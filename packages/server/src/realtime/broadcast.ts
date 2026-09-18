@@ -4,6 +4,9 @@ import { broadcastToVoid } from "./channels.js";
  * The exact event set from architecture.md §5 — D32 scopes live sync to
  * Task/Group create/update/move/delete plus void.deleted (§6.2); nothing
  * else (e.g. ChecklistItem/Comment changes) is broadcast in MVP.
+ *
+ * Third feature pass: TaskLink ("arrow") create/delete added — same
+ * generic broadcast mechanism, extended the same way Task/Group were.
  */
 export type RealtimeEventType =
   | "task.created"
@@ -13,7 +16,9 @@ export type RealtimeEventType =
   | "group.created"
   | "group.updated"
   | "group.deleted"
-  | "void.deleted";
+  | "void.deleted"
+  | "taskLink.created"
+  | "taskLink.deleted";
 
 /**
  * The single shared "mutate → broadcast" wrapper (implementation-plan.md

@@ -122,8 +122,8 @@ describe("Group auto-sizing (second feature pass)", () => {
     const grown = await findGroupById(group.id);
     expect(grown!.width).toBeGreaterThan(GROUP_MIN_WIDTH);
 
-    await deleteTask(t1.task.id);
-    await deleteTask(t2.task.id);
+    await deleteTask(t1.task);
+    await deleteTask(t2.task);
 
     const shrunk = await findGroupById(group.id);
     expect(shrunk!.width).toBe(GROUP_MIN_WIDTH);

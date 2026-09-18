@@ -26,6 +26,6 @@ export async function resetAuthTables(): Promise<void> {
  */
 export async function resetOrgTables(): Promise<void> {
   await db.execute(
-    sql`TRUNCATE TABLE organizations, memberships, audit_logs, voids, void_access_grants, void_join_requests, groups, tasks, task_assignees, checklist_items, comments, task_activities, invitations, notifications, tags, task_tags, group_tags RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE TABLE organizations, memberships, audit_logs, voids, void_access_grants, void_join_requests, groups, tasks, task_assignees, checklist_items, comments, task_activities, task_links, invitations, notifications, tags, task_tags, group_tags RESTART IDENTITY CASCADE`,
   );
 }

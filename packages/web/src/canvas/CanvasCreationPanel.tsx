@@ -4,6 +4,7 @@ import { trpc } from "../trpc/client";
 import { useCanvasStore } from "./store";
 import { Button } from "../ui/Button";
 import { TagPicker } from "./TagPicker";
+import { showToast } from "../ui/toastStore";
 import type { Task, Group } from "../trpc/types";
 
 type Choice = "task" | "group" | null;
@@ -159,7 +160,10 @@ function TaskCreateForm({
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<TaskPriority | "">("");
   const [tagNames, setTagNames] = useState<string[]>([]);
-  const create = trpc.task.create.useMutation({ onSuccess: (t) => onCreated(t) });
+  const create = trpc.task.create.useMutation({
+    onSuccess: (t) => onCreated(t),
+    onError: () => showToast("Failed to create Task."),
+  });
 
   return (
     <form
@@ -232,7 +236,10 @@ function GroupCreateForm({
 }) {
   const [name, setName] = useState("");
   const [tagNames, setTagNames] = useState<string[]>([]);
-  const create = trpc.group.create.useMutation({ onSuccess: (g) => onCreated(g) });
+  const create = trpc.group.create.useMutation({
+    onSuccess: (g) => onCreated(g),
+    onError: () => showToast("Failed to create Group."),
+  });
 
   return (
     <form

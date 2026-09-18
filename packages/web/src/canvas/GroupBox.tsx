@@ -2,6 +2,8 @@ import { memo, useEffect, useRef, useState } from "react";
 import { trpc } from "../trpc/client";
 import { useCanvasStore } from "./store";
 import { TagPicker } from "./TagPicker";
+import { Spinner } from "../ui/Button";
+import { showToast, mutationErrorMessage } from "../ui/toastStore";
 import type { Group } from "../trpc/types";
 
 /**
@@ -27,17 +29,29 @@ export const GroupBox = memo(function GroupBox({
   previewBounds?: { x: number; y: number; width: number; height: number } | undefined;
 }) {
   const isSelected = useCanvasStore((s) => s.isSelected("group", group.id));
+  const isPendingDeletion = useCanvasStore((s) => s.isPendingDeletion("group", group.id));
   const select = useCanvasStore((s) => s.select);
   const setLocalPosition = useCanvasStore((s) => s.setLocalPosition);
+  const setLiveDragPosition = useCanvasStore((s) => s.setLiveDragPosition);
+  const clearLiveDragPosition = useCanvasStore((s) => s.clearLiveDragPosition);
+  const liveDragPosition = useCanvasStore((s) =>
+    s.liveDragPosition?.kind === "group" && s.liveDragPosition.id === group.id
+      ? s.liveDragPosition
+      : null,
+  );
   const applyGroup = useCanvasStore((s) => s.applyGroup);
   const utils = trpc.useUtils();
-  const update = trpc.group.update.useMutation({ onSuccess: (updated) => applyGroup(updated) });
+  const update = trpc.group.update.useMutation({
+    onSuccess: (updated) => applyGroup(updated),
+    onError: (err) => showToast(mutationErrorMessage(err, "Failed to update Group.")),
+  });
   const tags = trpc.group.listTags.useQuery({ groupId: group.id }, { enabled: isSelected });
   const setTagNames = trpc.group.update.useMutation({
     onSuccess: (updated) => {
       applyGroup(updated);
       utils.group.listTags.invalidate({ groupId: group.id });
     },
+    onError: () => showToast("Failed to update Group tags."),
   });
 
   const [editingName, setEditingName] = useState(false);
@@ -55,7 +69,7 @@ export const GroupBox = memo(function GroupBox({
   } | null>(null);
 
   function handlePointerDown(e: React.PointerEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || isPendingDeletion) return;
     e.stopPropagation();
     (e.target as Element).setPointerCapture(e.pointerId);
     dragState.current = {
@@ -77,7 +91,7 @@ export const GroupBox = memo(function GroupBox({
     if (!drag.moved && Math.hypot(e.clientX - drag.startScreenX, e.clientY - drag.startScreenY) < 3)
       return;
     drag.moved = true;
-    setLocalPosition("group", group.id, drag.startWorldX + dx, drag.startWorldY + dy);
+    setLiveDragPosition("group", group.id, drag.startWorldX + dx, drag.startWorldY + dy);
   }
 
   function handlePointerUp(e: React.PointerEvent) {
@@ -85,8 +99,12 @@ export const GroupBox = memo(function GroupBox({
     if (!drag || drag.pointerId !== e.pointerId) return;
     dragState.current = null;
     if (drag.moved) {
-      const current = useCanvasStore.getState().groups.get(group.id);
-      if (current) update.mutate({ groupId: group.id, x: current.x, y: current.y });
+      const zoom = useCanvasStore.getState().camera.zoom;
+      const finalX = drag.startWorldX + (e.clientX - drag.startScreenX) / zoom;
+      const finalY = drag.startWorldY + (e.clientY - drag.startScreenY) / zoom;
+      setLocalPosition("group", group.id, finalX, finalY);
+      clearLiveDragPosition();
+      update.mutate({ groupId: group.id, x: finalX, y: finalY });
     } else {
       select({ kind: "group", id: group.id }, e.shiftKey);
     }
@@ -119,20 +137,27 @@ export const GroupBox = memo(function GroupBox({
         onPointerUp={handlePointerUp}
         style={{
           position: "absolute",
-          left: group.x,
-          top: group.y,
+          left: liveDragPosition?.x ?? group.x,
+          top: liveDragPosition?.y ?? group.y,
           width: group.width,
           height: group.height,
           border: `1.5px dashed ${isSelected ? "var(--canvas-selection-border)" : "var(--canvas-border-strong)"}`,
           borderRadius: "var(--radius-lg)",
           background: isSelected ? "var(--canvas-selection)" : "transparent",
-          cursor: "grab",
+          cursor: isPendingDeletion ? "not-allowed" : "grab",
           userSelect: "none",
           touchAction: "none",
+          opacity: isPendingDeletion ? 0.5 : 1,
+          pointerEvents: isPendingDeletion ? "none" : undefined,
           transition:
-            "border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), left var(--motion-base) var(--ease-standard), top var(--motion-base) var(--ease-standard), width var(--motion-base) var(--ease-standard), height var(--motion-base) var(--ease-standard)",
+            "border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), left var(--motion-base) var(--ease-standard), top var(--motion-base) var(--ease-standard), width var(--motion-base) var(--ease-standard), height var(--motion-base) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard)",
         }}
       >
+        {isPendingDeletion && (
+          <div aria-hidden="true" style={{ position: "absolute", top: -24, right: 0 }}>
+            <Spinner />
+          </div>
+        )}
         <div
           style={{
             position: "absolute",
@@ -157,6 +182,7 @@ export const GroupBox = memo(function GroupBox({
                 }
               }}
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              disabled={update.isPending}
               style={{
                 fontSize: 12,
                 fontWeight: 500,
@@ -183,9 +209,13 @@ export const GroupBox = memo(function GroupBox({
                 fontWeight: 500,
                 padding: 0,
                 cursor: "text",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
               }}
             >
               {group.name}
+              {update.isPending && <Spinner />}
             </button>
           )}
           {isSelected && (

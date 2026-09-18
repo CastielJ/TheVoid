@@ -5,6 +5,7 @@ import { useVoidRealtime } from "../realtime/useVoidRealtime";
 import { useCanvasStore } from "./store";
 import { CanvasViewport } from "./CanvasViewport";
 import { CanvasCreationPanel } from "./CanvasCreationPanel";
+import { LinkTypeToggle } from "./LinkTypeToggle";
 import { Button } from "../ui/Button";
 import { FullPageStatus } from "../app/ProtectedRoute";
 import { useLeftPanel } from "../app/LeftPanelContext";
@@ -183,6 +184,7 @@ export function CanvasPage() {
           <span style={{ fontSize: 12, color: "var(--canvas-text-muted)" }}>
             Double-click anywhere to create
           </span>
+          <LinkTypeToggle />
           <button
             onClick={() => navigate(`/orgs/${orgId}/voids/${voidId}/settings`)}
             aria-label="Void settings"
