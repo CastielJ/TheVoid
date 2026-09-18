@@ -505,6 +505,63 @@ export type ChecklistItem = typeof checklistItems.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type TaskActivity = typeof taskActivities.$inferSelect;
 
+export const taskLinkTypeValues = ["flow", "dependency"] as const;
+
+/**
+ * Task-to-task connections ("arrows" on the canvas) — third feature pass.
+ * "flow" is purely visual/informational ordering; "dependency" is the same
+ * directed shape but enforced (domains/task/tasks.ts's updateTask blocks
+ * marking the target Task "done" while its source isn't). Directionality
+ * convention: `sourceTaskId` is the Task that must finish first,
+ * `targetTaskId` is the one that follows/depends on it — reads naturally
+ * for both types. No `deletedAt` — a link row is hard-deleted (unlike
+ * Task/Group/Void); create+delete only, no update (change type/endpoints
+ * by deleting and recreating). Self-loop and cross-Void checks are
+ * application-layer (domains/task/taskLinks.ts), mirroring how C3's
+ * groupId-same-Void check on Tasks is enforced, not a DB constraint. The
+ * `onDelete: "cascade"` FKs below are a dormant safety net exactly like
+ * `voids.parentVoidId`'s — Task deletion is always a soft-delete, so the
+ * real, live-path cascade lives in deleteTask's own transaction instead.
+ */
+export const taskLinks = pgTable(
+  "task_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    voidId: uuid("void_id")
+      .notNull()
+      .references(() => voids.id, { onDelete: "cascade" }),
+    sourceTaskId: uuid("source_task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    targetTaskId: uuid("target_task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    type: text("type", { enum: taskLinkTypeValues }).notNull(),
+    version: bigint("version", { mode: "number" }).notNull().default(1),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("task_links_void_id_idx").on(table.voidId),
+    index("task_links_source_task_id_idx").on(table.sourceTaskId),
+    index("task_links_target_task_id_idx").on(table.targetTaskId),
+    // Blocks an accidental duplicate (e.g. double-drag) while still
+    // allowing a "flow" and a "dependency" edge on the same ordered pair
+    // (they answer different questions) and the reverse direction as a
+    // distinct row.
+    uniqueIndex("task_links_source_target_type_idx").on(
+      table.sourceTaskId,
+      table.targetTaskId,
+      table.type,
+    ),
+  ],
+);
+
+export type TaskLink = typeof taskLinks.$inferSelect;
+export type TaskLinkType = (typeof taskLinkTypeValues)[number];
+
 /**
  * Post-launch refinement pass — Organization-scoped Tags. Reusable across
  * every Void in an Organization (not duplicated per-Void); created inline

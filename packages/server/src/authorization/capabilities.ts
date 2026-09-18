@@ -1,11 +1,12 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { voidAccessGrants, type VoidAccessGrantRole } from "../db/schema.js";
+import { voidAccessGrants, voids, memberships, type VoidAccessGrantRole } from "../db/schema.js";
 import { getActiveMembership } from "../domains/organization/memberships.js";
 import { findVoidById } from "../domains/void/voids.js";
 import { findVoidAccessGrantById } from "../domains/void/voidAccessGrants.js";
 import { findGroupById } from "../domains/group/groups.js";
 import { findTaskById } from "../domains/task/tasks.js";
+import { findTaskLinkById } from "../domains/task/taskLinks.js";
 import { findChecklistItemById } from "../domains/task/checklistItems.js";
 import { findCommentById } from "../domains/task/comments.js";
 import { findInvitationById } from "../domains/invitation/invitations.js";
@@ -73,28 +74,40 @@ export async function canTransferOwnership(
 // "Team member" is now just a plain per-user VoidAccessGrant on that child
 // Void. There is no longer a separate grant type to resolve through a join.
 
+/**
+ * Collapses what used to be three sequential round trips (findVoidById,
+ * getActiveMembership, a direct voidAccessGrants select) into one JOIN —
+ * this is the single most-called function in the whole authorization
+ * system, so the round-trip count matters. Still hits the DB fresh on
+ * every call (no caching added, no behavior change): the inner join on an
+ * active Membership reproduces the Phase 4 addendum below exactly (a User
+ * who no longer has an active Membership in the Void's Organization has no
+ * access at all, regardless of any VoidAccessGrant row — member removal
+ * (D17) only ends Membership, never touches VoidAccessGrant rows), and the
+ * left join reproduces "grant exists -> its role, else null" exactly.
+ */
 export async function getVoidRole(
   userId: string,
   voidId: string,
 ): Promise<VoidAccessGrantRole | null> {
-  const voidRow = await findVoidById(voidId);
-  if (!voidRow || voidRow.deletedAt) return null;
-
-  // Phase 4 addendum (docs/decisions.md): a User who no longer has an
-  // active Membership in the Void's Organization has no access at all,
-  // regardless of any VoidAccessGrant row — member removal (D17) only
-  // explicitly ends Membership, never touches VoidAccessGrant rows, so
-  // without this check a removed member's old grant would silently keep
-  // working forever.
-  const membership = await getActiveMembership(userId, voidRow.organizationId);
-  if (!membership) return null;
-
-  const [direct] = await db
-    .select()
-    .from(voidAccessGrants)
-    .where(and(eq(voidAccessGrants.voidId, voidId), eq(voidAccessGrants.userId, userId)))
+  const [row] = await db
+    .select({ role: voidAccessGrants.role })
+    .from(voids)
+    .innerJoin(
+      memberships,
+      and(
+        eq(memberships.organizationId, voids.organizationId),
+        eq(memberships.userId, userId),
+        eq(memberships.status, "active"),
+      ),
+    )
+    .leftJoin(
+      voidAccessGrants,
+      and(eq(voidAccessGrants.voidId, voids.id), eq(voidAccessGrants.userId, userId)),
+    )
+    .where(and(eq(voids.id, voidId), isNull(voids.deletedAt)))
     .limit(1);
-  return direct?.role ?? null;
+  return row ? (row.role ?? null) : null;
 }
 
 /**
@@ -181,6 +194,30 @@ export async function canEditVoidForTask(userId: string, taskId: string): Promis
   const task = await findTaskById(taskId);
   if (!task) return false;
   return canEditVoid(userId, task.voidId);
+}
+
+/**
+ * TaskLink create needs edit-capability on BOTH endpoint Tasks — composed
+ * from canEditVoidForTask rather than a new primitive. requireCapability
+ * (trpc.ts) resolves one `targetId` string per procedure, so the pair is
+ * packed into a single `"sourceTaskId:targetTaskId"` string at the call
+ * site and unpacked here.
+ */
+export async function canEditVoidForTaskPair(userId: string, pairKey: string): Promise<boolean> {
+  const [sourceTaskId, targetTaskId] = pairKey.split(":");
+  if (!sourceTaskId || !targetTaskId) return false;
+  const [sourceOk, targetOk] = await Promise.all([
+    canEditVoidForTask(userId, sourceTaskId),
+    canEditVoidForTask(userId, targetTaskId),
+  ]);
+  return sourceOk && targetOk;
+}
+
+/** TaskLink mutations that take a taskLinkId (delete) — resolve through the link to its endpoint pair. */
+export async function canEditVoidForTaskLink(userId: string, taskLinkId: string): Promise<boolean> {
+  const link = await findTaskLinkById(taskLinkId);
+  if (!link) return false;
+  return canEditVoidForTaskPair(userId, `${link.sourceTaskId}:${link.targetTaskId}`);
 }
 
 /**

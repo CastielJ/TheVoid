@@ -169,6 +169,16 @@ a {
   background: rgba(127, 127, 127, 0.14);
 }
 
+/* Third feature pass — TaskCard's Task Link connector handle: hidden until
+   the card itself is hovered, so it doesn't clutter the canvas at scale. */
+.void-task-link-handle {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+[data-testid="task-card"]:hover .void-task-link-handle {
+  opacity: 1;
+}
+
 /* Single source of truth for reduced motion (D-addendum: post-launch
    refinement pass) — every transition/animation in the app is neutralized
    here instead of each component independently checking the media query. */

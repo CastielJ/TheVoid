@@ -3,6 +3,7 @@ import { SessionProvider } from "./app/session";
 import { ProtectedRoute } from "./app/ProtectedRoute";
 import { LeftPanelProvider } from "./app/LeftPanelContext";
 import { LeftPanel } from "./app/LeftPanel";
+import { ToastHost } from "./ui/Toast";
 import { LoginPage } from "./features/auth/LoginPage";
 import { SignupPage } from "./features/auth/SignupPage";
 import { VerifyEmailPage } from "./features/auth/VerifyEmailPage";
@@ -23,6 +24,7 @@ export function App() {
             CanvasPage, which has its own header rather than AppShell's) —
             see app/LeftPanelContext.tsx. */}
         <LeftPanel />
+        <ToastHost />
         <Routes>
           <Route path="/" element={<Navigate to="/orgs" replace />} />
           <Route path="/login" element={<LoginPage />} />

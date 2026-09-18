@@ -61,7 +61,7 @@ describe("Task assignment: C8 eligibility & D17 interaction", () => {
     if (!task.ok) throw new Error("unreachable");
 
     const result = await assignTask(task.task.id, person.id, owner.id);
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, task: expect.objectContaining({ id: task.task.id }) });
 
     const assignees = await listAssigneesForTask(task.task.id);
     expect(assignees).toHaveLength(1);

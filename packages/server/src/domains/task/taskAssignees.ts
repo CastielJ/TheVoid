@@ -1,6 +1,6 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { taskAssignees, type TaskAssignee } from "../../db/schema.js";
+import { taskAssignees, type TaskAssignee, type Task } from "../../db/schema.js";
 import { canAccessVoid } from "../../authorization/capabilities.js";
 import { findTaskById } from "./tasks.js";
 import { recordTaskActivity } from "./taskActivity.js";
@@ -8,7 +8,7 @@ import { createNotification } from "../notification/notifications.js";
 import { findVoidById } from "../void/voids.js";
 
 export type AssignTaskResult =
-  { ok: true } | { ok: false; reason: "task_not_found" | "user_not_eligible" };
+  { ok: true; task: Task } | { ok: false; reason: "task_not_found" | "user_not_eligible" };
 
 /**
  * C8: an active assignment (`assignee_active = true`) may only be created
@@ -68,7 +68,7 @@ export async function assignTask(
       });
     }
 
-    return { ok: true as const };
+    return { ok: true as const, task };
   });
 }
 

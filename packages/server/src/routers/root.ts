@@ -5,6 +5,7 @@ import { organizationRouter } from "./organization.js";
 import { voidRouter } from "./void.js";
 import { groupRouter } from "./group.js";
 import { taskRouter } from "./task.js";
+import { taskLinkRouter } from "./taskLink.js";
 import { invitationRouter } from "./invitation.js";
 import { notificationRouter } from "./notification.js";
 import { searchRouter } from "./search.js";
@@ -31,6 +32,7 @@ export const appRouter = router({
   void: voidRouter,
   group: groupRouter,
   task: taskRouter,
+  taskLink: taskLinkRouter,
   invitation: invitationRouter,
   notification: notificationRouter,
   search: searchRouter,

@@ -16,6 +16,7 @@ import { recordTaskActivity } from "./taskActivity.js";
 import { listAccessibleVoids } from "../void/voids.js";
 import { copyTaskTags } from "../tag/tags.js";
 import { recomputeGroupBounds } from "../group/groups.js";
+import { deleteTaskLinksForTask, findIncompleteDependencySources } from "./taskLinks.js";
 
 export interface CreateTaskInput {
   voidId: string;
@@ -195,6 +196,19 @@ export interface UpdateTaskInput {
   dueDate?: string | null;
 }
 
+/**
+ * Thrown before the transaction opens, so a blocked "done" never produces
+ * a partial write. Deliberately leaves updateTask's own `Task | null`
+ * return type unchanged (a broader result-object refactor would ripple
+ * through every existing caller/test) — the router catches this and maps
+ * it to a BAD_REQUEST with a specific message instead.
+ */
+export class DependencyNotSatisfiedError extends Error {
+  constructor(public readonly blockingTaskIds: string[]) {
+    super("This Task depends on an incomplete Task and cannot be marked done.");
+  }
+}
+
 /** Content fields only — position/grouping go through moveTask below. */
 export async function updateTask(
   taskId: string,
@@ -203,6 +217,11 @@ export async function updateTask(
 ): Promise<Task | null> {
   const existing = await findTaskById(taskId);
   if (!existing || existing.deletedAt) return null;
+
+  if (input.status === "done" && existing.status !== "done") {
+    const blockingTaskIds = await findIncompleteDependencySources(taskId);
+    if (blockingTaskIds.length > 0) throw new DependencyNotSatisfiedError(blockingTaskIds);
+  }
 
   return db.transaction(async (tx) => {
     const [updated] = await tx
@@ -316,16 +335,32 @@ export async function moveTask(
 }
 
 export type DeleteTaskResult =
-  { ok: true; recomputedGroup?: Group } | { ok: false; reason: "not_found" };
+  | { ok: true; recomputedGroup?: Group; deletedLinkIds: string[] }
+  | { ok: false; reason: "not_found" };
 
-export async function deleteTask(taskId: string): Promise<DeleteTaskResult> {
-  const existing = await findTaskById(taskId);
-  if (!existing || existing.deletedAt) return { ok: false, reason: "not_found" as const };
-  const recomputedGroup = await db.transaction(async (tx) => {
-    await tx.update(tasks).set({ deletedAt: new Date() }).where(eq(tasks.id, taskId));
-    return existing.groupId ? await recomputeGroupBounds(tx, existing.groupId) : undefined;
+/**
+ * Takes the already-fetched row rather than a taskId — every call site
+ * already had to fetch it first (to resolve the Void for the realtime
+ * broadcast, or simply to 404 on a missing Task), so re-fetching the same
+ * row here was a pure redundant round trip.
+ *
+ * Also the real, live-path cascade for TaskLinks: the `onDelete: "cascade"`
+ * FK on task_links is a dormant safety net (like voids.parentVoidId's) —
+ * Task deletion is always this soft-delete, never a hard row DELETE, so
+ * without this explicit step every other connected client would keep a
+ * dangling arrow pointing at a Task that just disappeared for them.
+ */
+export async function deleteTask(existing: Task): Promise<DeleteTaskResult> {
+  if (existing.deletedAt) return { ok: false, reason: "not_found" as const };
+  const { recomputedGroup, deletedLinkIds } = await db.transaction(async (tx) => {
+    await tx.update(tasks).set({ deletedAt: new Date() }).where(eq(tasks.id, existing.id));
+    const recomputedGroup = existing.groupId
+      ? await recomputeGroupBounds(tx, existing.groupId)
+      : undefined;
+    const deletedLinkIds = await deleteTaskLinksForTask(tx, existing.id);
+    return { recomputedGroup, deletedLinkIds };
   });
-  return { ok: true as const, recomputedGroup };
+  return { ok: true as const, recomputedGroup, deletedLinkIds };
 }
 
 export type DuplicateTaskResult =

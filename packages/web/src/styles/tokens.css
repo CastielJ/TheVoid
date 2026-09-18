@@ -58,6 +58,15 @@
   --color-status-done: #16a34a;
   --color-status-blocked: #dc2626;
 
+  /* Third feature pass: Task-to-Task connection ("arrow") colors — same
+     theme-invariant "small saturated indicator" treatment as the priority/
+     status colors above, since both need to read clearly against either
+     canvas background. Flow (solid) is purely informational ordering;
+     dependency (dashed, in EdgeLayer.tsx) is enforced, hence the more
+     attention-grabbing color. */
+  --color-edge-flow: #0891b2;
+  --color-edge-dependency: #ea580c;
+
   /* Defensive fallback only (light) — see file header. */
   --color-bg: #fafafa;
   --color-surface: #ffffff;

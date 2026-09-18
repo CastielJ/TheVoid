@@ -73,7 +73,7 @@ export function Button({
   );
 }
 
-function Spinner() {
+export function Spinner() {
   return (
     <span
       aria-hidden="true"

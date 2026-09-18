@@ -150,7 +150,10 @@ test("signup -> org -> invite(seeded) -> void (wizard) -> group -> task -> assig
 
   // --- 7. create a Task via double-click-to-create, away from the Group ---------
   await ownerPage.dblclick('[data-testid="canvas-viewport"]', { position: { x: 300, y: 500 } });
-  await ownerPage.click('button:has-text("Task")');
+  // Exact match: the header's "Connect Tasks" button (third feature pass —
+  // Task Links) also contains the substring "Task", which a plain
+  // has-text("Task") would now ambiguously match too.
+  await ownerPage.getByRole("button", { name: "Task", exact: true }).click();
   await ownerPage.fill('[aria-label="Task title"]', "Ship the roadmap");
   await ownerPage.click('button:has-text("Create Task")');
   await expect(ownerPage.locator('[data-testid="task-card"]')).toBeVisible();

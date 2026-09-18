@@ -147,8 +147,10 @@ describe("Task domain (implementation-plan.md Phase 4)", () => {
     if (!created.ok) throw new Error("unreachable");
 
     expect(await listTasksForVoid(v.id)).toHaveLength(1);
-    const result = await deleteTask(created.task.id);
-    expect(result).toEqual({ ok: true });
+    const existing = await findTaskById(created.task.id);
+    if (!existing) throw new Error("unreachable");
+    const result = await deleteTask(existing);
+    expect(result).toEqual({ ok: true, deletedLinkIds: [] });
 
     expect(await listTasksForVoid(v.id)).toHaveLength(0);
     const raw = await findTaskById(created.task.id);
